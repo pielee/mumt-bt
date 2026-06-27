@@ -1,0 +1,16 @@
+<root BTCPP_format="4">
+  <BehaviorTree ID="MUMT_Formation">
+
+    <!-- BT 1개 = UAV 1대. 기체 이름은 실행 시 ns 인자로 지정 (예: main.py ... [ns F16_UAV]).
+         uav_name 속성을 주면 그게 우선, 없으면 ns, 그것도 없으면 UAV_NAME 기본값.
+         이 프레임워크는 노드 이름을 태그명에서 받으므로 name 속성은 안 씀.
+         2대 이상은 같은 config로 프로세스를 더 띄우면 됨 (ns F16_UAV2 ...). -->
+    <Sequence>
+      <MannedAircraftTookOff/>
+      <UAVTakeOff            target_heading_deg="90.0"/>
+      <UAVReachedAltitude/>
+      <FormationFlight       lateral_sign="-1.0"/>
+    </Sequence>
+
+  </BehaviorTree>
+</root>

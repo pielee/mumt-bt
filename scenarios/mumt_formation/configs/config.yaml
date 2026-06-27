@@ -1,0 +1,14 @@
+scenario:
+  environment: scenarios.mumt_formation
+
+agent:
+  namespaces: ""
+  behavior_tree_xml: "mumt_formation.xml"
+
+bt_runner:
+  bt_tick_rate: 200.0
+  bt_visualiser:
+    enabled: True
+    screen_width: 900
+    screen_height: 700
+  profiling_mode: False
