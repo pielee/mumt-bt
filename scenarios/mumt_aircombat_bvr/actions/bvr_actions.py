@@ -51,6 +51,21 @@ def _distance_m(from_lat, from_lon, to_lat, to_lon) -> float:
     return math.sqrt((dlat * R) ** 2 + (dlon * R * math.cos(lat_m)) ** 2)
 
 
+def resolve_aircraft_name(agent, blackboard) -> str:
+    """The UAV this BT controls.
+
+    Prefer the exact name echoed back in own_state (UE puts Pawn->GetName() in
+    every state entry); fall back to the launch namespace (--ns) before the
+    first state batch arrives.  UE matches the setpoint's aircraft_name against
+    the pawn name (exact first, then substring), so either form routes correctly.
+    """
+    own = (blackboard or {}).get("own_state") or {}
+    name = own.get("aircraft_name")
+    if name:
+        return str(name)
+    return (getattr(agent, "agent_id", "") or "").strip("/")
+
+
 # ── Base for all BVR actions ──────────────────────────────────────────────────
 
 class _BVRActionBase(ActionWithROSTopic):
@@ -76,6 +91,19 @@ class _BVRActionBase(ActionWithROSTopic):
     # Subclasses override this
     def _build_message(self, agent, blackboard):
         raise NotImplementedError
+
+    async def run(self, agent, blackboard):
+        # Same as ActionWithROSTopic.run, but stamp this UAV's name so UE routes
+        # the setpoint to the right aircraft (one BT per UAV, shared topic).
+        msg = self._build_message(agent, blackboard)
+        if msg is None:
+            self.status = Status.FAILURE
+            return self.status
+        if not getattr(msg, "aircraft_name", ""):
+            msg.aircraft_name = resolve_aircraft_name(agent, blackboard)
+        self._pub.publish(msg)
+        self.status = self._interpret_publish(msg, agent, blackboard)
+        return self.status
 
 
 # ── 1. Pursue ────────────────────────────────────────────────────────────────

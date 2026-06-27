@@ -33,6 +33,7 @@ from scenarios.mumt_aircombat_bvr.actions.bvr_actions import (
     MAW_evade,
     MAW_guide_evade,
     Guide_own,
+    resolve_aircraft_name,
 )
 
 # ── Node registration ──────────────────────────────────────────────────────────
@@ -74,9 +75,33 @@ class BVRWorldState:
 
     def __init__(self, agent):
         self._latest: dict = {}
+        # This UAV's id (== launch --ns). Used to pick our own entry out of the
+        # multi-aircraft state batch.
+        self._name = (getattr(agent, "agent_id", "") or "").strip("/")
         agent.ros_bridge.node.create_subscription(
             String, _STATE_TOPIC, self._cb, 1
         )
+
+    def _select_own(self, aircraft_list):
+        """Pick THIS UAV's entry out of the multi-aircraft state batch.
+
+        No namespace set → first entry (single-UAV / manned). Otherwise match by
+        name: exact first (collision-free for prefixes like F16_UAV vs F16_UAV2),
+        then substring ONLY if exactly one entry contains the name. An ambiguous
+        or missing name returns None (wait) rather than grabbing a wrong aircraft.
+        """
+        if not aircraft_list:
+            return None
+        if not self._name:
+            return aircraft_list[0]
+        for a in aircraft_list:                                  # 1) exact
+            if a.get("aircraft_name", "") == self._name:
+                return a
+        subs = [a for a in aircraft_list                          # 2) unambiguous substring
+                if self._name in a.get("aircraft_name", "")]
+        if len(subs) == 1:
+            return subs[0]
+        return None
 
     def _cb(self, msg: String):
         try:
@@ -84,9 +109,9 @@ class BVRWorldState:
         except json.JSONDecodeError:
             return
         aircraft_list = payload.get("aircraft", [])
-        if not aircraft_list:
+        raw = self._select_own(aircraft_list)
+        if raw is None:
             return
-        raw = aircraft_list[0]  # own aircraft is first entry
         self._latest = {
             "heading_deg": float(raw.get("yaw", 0.0)),
             "altitude_m":  float(raw.get("z", 0.0)) / 100.0,
@@ -169,6 +194,7 @@ class CruiseFlight(ActionWithROSTopic):
         msg.altitude_m     = target_alt
         msg.throttle_norm  = max(0.0, min(1.0, throttle))
         msg.launch_missile = False
+        msg.aircraft_name  = resolve_aircraft_name(agent, blackboard)
 
         agent.ros_bridge.node.get_logger().info(
             f"[CruiseFlight] hdg={own.get('heading_deg', '?'):.1f}° alt={own.get('altitude_m', '?'):.0f}m"
@@ -222,6 +248,7 @@ class TakeOff(ActionWithROSTopic):
         msg.altitude_m     = self._target_alt
         msg.throttle_norm  = self._throttle
         msg.launch_missile = False
+        msg.aircraft_name  = resolve_aircraft_name(agent, blackboard)
 
         current_alt = float(own.get("altitude_m", 0.0))
         stable_secs = (time.monotonic() - self._stable_since) if self._stable_since else 0.0
@@ -287,6 +314,7 @@ class TurnRight(ActionWithROSTopic):
         msg.altitude_m     = target_alt
         msg.throttle_norm  = self._throttle
         msg.launch_missile = False
+        msg.aircraft_name  = resolve_aircraft_name(agent, blackboard)
 
         current_hdg = float(own.get("heading_deg", 0.0))
         diff = _delta_heading(self._target_heading, current_hdg)
