@@ -1,0 +1,14 @@
+scenario:
+  environment: scenarios.mumt
+
+agent:
+  namespaces: "/F16_UAV2"           # 프로세스/노드 구분용 (setpoint 토픽은 공유). own_name은 XML에서 명시
+  behavior_tree_xml: "uav2_bt.xml"  # 우측 앞 편대 (F16_UAV2)
+
+bt_runner:
+  bt_tick_rate: 10.0
+  bt_visualiser:
+    enabled: True
+    screen_width: 600
+    screen_height: 600
+  profiling_mode: False

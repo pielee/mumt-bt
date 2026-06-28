@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt">
+
+    <!-- ===== 최종 트리 (Ground → Wait → Takeoff → Formation) =====
+         own_name/leader_name = 실제 UE pawn 이름 (F16_UAV / M_F16; 접미사 _C_N 토큰매칭).
+         이 프레임워크는 노드 이름을 태그명에서 받으므로 name 속성은 안 씀. -->
+    <ReactiveSequence>
+      <GatherState own_name="F16_UAV" leader_name="M_F16"/>
+      <Sequence>
+        <WaitForLeaderTakeoff leader_airborne_climb_m="80"/>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="200"/>
+        <!-- aft_offset_m 음수 = 유인기 앞쪽 슬롯 (양수면 뒤쪽). lateral 0 이면 정면. -->
+        <MaintainFormation aft_offset_m="-80" lateral_offset_m="-40" vertical_offset_m="0"
+                           blend_radius_m="300" kp_speed="0.05"/>
+      </Sequence>
+    </ReactiveSequence>
+
+    <!-- ===== 마일스톤별 테스트용 (위 트리를 주석처리하고 아래 하나를 쓰면 단계 검증) =====
+
+    M0 (체인+나이브 이륙): 고정 setpoint만
+      <HoldSetpoint own_name="F16_UAV" heading_deg="90" altitude_m="3000" target_speed_mps="220"/>
+
+    M1 (상태 인지만, 동작은 M0):
+      <ReactiveSequence>
+        <GatherState own_name="F16_UAV" leader_name="M_F16"/>
+        <HoldSetpoint own_name="F16_UAV" heading_deg="90" altitude_m="3000" target_speed_mps="220"/>
+      </ReactiveSequence>
+
+    M2 (대기→이륙, 편대 제외):
+      <ReactiveSequence>
+        <GatherState own_name="F16_UAV" leader_name="M_F16"/>
+        <Sequence>
+          <WaitForLeaderTakeoff leader_airborne_climb_m="80"/>
+          <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="200"/>
+        </Sequence>
+      </ReactiveSequence>
+    -->
+
+  </BehaviorTree>
+</root>

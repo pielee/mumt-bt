@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt">
+
+    <!-- ===== UAV2 = F16_UAV2 : 리더 앞 '우측' 편대 =====
+         own_name = UE 아웃라이너 라벨(GetActorLabel) 기준. 에디터에서 이 기체 라벨을 F16_UAV2 로.
+         own_name 을 모든 노드에 F16_UAV2 로 명시(공유 토픽에서 이 기체만 조종).
+         슬롯: aft_offset_m=-80 (리더 앞 80m), lateral_offset_m=+40 (우측 40m).
+         UAV1(좌측)은 uav1_bt.xml. -->
+    <ReactiveSequence>
+      <GatherState own_name="F16_UAV2" leader_name="M_F16"/>
+      <Sequence>
+        <WaitForLeaderTakeoff leader_airborne_climb_m="80" own_name="F16_UAV2"/>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="200" own_name="F16_UAV2"/>
+        <MaintainFormation own_name="F16_UAV2" aft_offset_m="-80" lateral_offset_m="40" vertical_offset_m="0"
+                           blend_radius_m="300" kp_speed="0.05"/>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>

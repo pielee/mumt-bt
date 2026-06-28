@@ -44,6 +44,19 @@ The framework is designed to be **scenario-agnostic** — easily define new scen
 
 ---
 
+### 3. 🛩️ [MUM-T Formation (MUMT_Sim / UE5 + JSBSim)](scenarios/mumt/README.md)
+
+**Manned-leader + UAV-wingman formation flight via the ROS↔UDP bridge**
+
+- **Environment**: UE5 + JSBSim flight sim, bridged through `mumt_ros_bridge` (ROS 2 ↔ UDP)
+- **Objective**: An autonomous UAV (`F16_UAV`) takes off after a human-flown manned leader (`M_F16`) and holds an offset formation slot
+- **Features**: Name-based addressing, autothrottle speed-hold, spawn-relative takeoff milestones, heading-blend anti-weave follower
+- **Best For**: Single-UAV manned–unmanned teaming and BT-over-bridge integration
+
+📍 For detailed setup and usage → [See `scenarios/mumt/README.md`](scenarios/mumt/README.md)
+
+---
+
 ## Maintainer
 
 **Inmo Jang**  
