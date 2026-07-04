@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt">
+
+    <!-- ===== 리더 UAV = F16_UAV1 : 이륙 → 무작위 기동 비행 =====
+         20초 직진 이륙/상승 후, 8초마다 새 목표(heading ±120°, 고도 800~1300, 속도 180~250)를
+         무작위로 뽑아 heading을 6°/s로 부드럽게 슬루. 상태구독 없음, 항상 RUNNING.
+         윙맨(F16_UAV2)이 이 무작위 기동을 편대로 추종. (seed>0 주면 재현 가능) -->
+    <RandomLeader own_name="F16_UAV1" start_heading_deg="90" altitude_m="1000" target_speed_mps="200"
+                  max_rate_dps="6" change_interval_s="8" max_turn_deg="120"
+                  alt_min="800" alt_max="1300" spd_min="180" spd_max="250"
+                  straight_time_s="20" seed="0"/>
+
+  </BehaviorTree>
+</root>

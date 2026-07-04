@@ -1,0 +1,14 @@
+scenario:
+  environment: scenarios.mumt
+
+agent:
+  namespaces: "/F16_UAV2"            # 윙맨 UAV
+  behavior_tree_xml: "wingman_bt.xml" # 리더 UAV(F16_UAV1) 편대 추종
+
+bt_runner:
+  bt_tick_rate: 10.0
+  bt_visualiser:
+    enabled: True
+    screen_width: 600
+    screen_height: 600
+  profiling_mode: False

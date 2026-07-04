@@ -11,9 +11,9 @@
       <GatherState own_name="F16_UAV1" leader_name="M_F16"/>
       <Sequence>
         <WaitForLeaderTakeoff leader_airborne_climb_m="80" own_name="F16_UAV1"/>
-        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="200" own_name="F16_UAV1"/>
-        <MaintainFormation own_name="F16_UAV1" aft_offset_m="-80" lateral_offset_m="-40" vertical_offset_m="0"
-                           blend_radius_m="300" kp_speed="0.05"/>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="120" own_name="F16_UAV1"/>
+        <MaintainFormation own_name="F16_UAV1" aft_offset_m="-100" lateral_offset_m="-40" vertical_offset_m="0"
+                           blend_radius_m="400" kp_speed="0.05"/>
       </Sequence>
     </ReactiveSequence>
 

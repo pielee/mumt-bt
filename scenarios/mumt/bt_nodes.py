@@ -10,8 +10,9 @@ UAV(F16_UAV)가 유인기(M_F16, 사람이 조이스틱으로 조종)를 편대 
 ★ 이 repo의 실제 인터페이스에 맞춰 스펙을 적응함 (repo = source of truth):
   - AircraftSetpoint = {aircraft_name, heading_deg, altitude_m, throttle_norm,
     target_speed_mps, launch_missile}. UE는 aircraft_name으로 pawn 라우팅 →
-    **반드시 채움**. 속도는 throttle 개루프 대신 **target_speed_mps(오토스로틀)**로
-    (상승 중 실속 방지). 라우팅은 상태에서 받은 정확한 이름 우선.
+    **반드시 채움**. 속도는 throttle 개루프 대신 **target_speed_mps(UE 오토스로틀)**로
+    (상승 중 실속 방지). BT는 '원하는 속도'만 결정하고, throttle 계산은 UE 제어기가 함.
+    라우팅은 상태에서 받은 정확한 이름 우선.
   - 헤딩 = 나침반(0=북, 90=동). UE 월드 x=East, y=South → atan2(ΔEast,ΔNorth)=atan2(Δx,-Δy).
   - 고도(altitude_m)는 **UE Location.Z/100 (UE-Z, m)** 기준 — 상태 z(cm)/100과 동일.
     (스펙 §8.2의 ASL 가정과 반대. 오토파일럿이 UE-Z를 쓰도록 바뀜.)
@@ -21,6 +22,7 @@ UAV(F16_UAV)가 유인기(M_F16, 사람이 조이스틱으로 조종)를 편대 
 
 import json
 import math
+import random
 
 from std_msgs.msg import String
 from custom_msgs.msg import AircraftSetpoint
@@ -33,7 +35,8 @@ from modules.base_bt_nodes_ros import ConditionWithROSTopics, ActionWithROSTopic
 # ── 노드 등록 ──────────────────────────────────────────────────────────────────
 BTNodeList.CONDITION_NODES.extend(["GatherState"])
 BTNodeList.ACTION_NODES.extend(
-    ["HoldSetpoint", "WaitForLeaderTakeoff", "Takeoff", "MaintainFormation"])
+    ["HoldSetpoint", "WaitForLeaderTakeoff", "Takeoff", "MaintainFormation",
+     "OrbitLeader", "RandomLeader"])
 
 # ── 토픽/상수 ────────────────────────────────────────────────────────────────────
 _STATE_TOPIC    = "/mumt/aircraft_states"
@@ -45,22 +48,25 @@ LEADER_NAME = "M_F16"
 
 # 이륙/상승 (전부 '스폰 대비 상대' + 오토스로틀 목표속도)
 RUNWAY_HEADING_DEG       = 90.0
-TAKEOFF_SPEED_MPS        = 220.0
+TAKEOFF_SPEED_MPS        = 260.0    # 이륙 중 리더에 덜 처지도록(리더 순항속도에 근접)
 LEADER_AIRBORNE_CLIMB_M  = 80.0     # 리더가 스폰 대비 +이만큼 오르면 '이륙' 간주
-UAV_AIRBORNE_CLIMB_M     = 200.0    # UAV가 스폰 대비 +이만큼 오르면 '이륙 완료'
+UAV_AIRBORNE_CLIMB_M     = 120.0    # UAV가 스폰 대비 +이만큼 오르면 '이륙 완료'(편대 빨리 시작 → 리더 이탈 전)
 TAKEOFF_CLIMB_TARGET_M   = 1000.0   # 이륙 단계 목표 상승고도(스폰 대비)
 
 # 편대
-AFT_OFFSET_M      = -80.0   # +면 리더 뒤, -면 리더 앞(앞쪽 편대). 부호로 앞/뒤 선택
+# AFT_OFFSET_M: +면 리더 뒤, -면 리더 앞(전방 편대). 전방은 UAV가 리더를 '추월'해야 도달 →
+# 리더가 최고속도면 추월 불가(동일 f16), 중간속도면 추월·유지 가능. 유지 자체는 후방과 동일.
+AFT_OFFSET_M      = -100.0  # 리더 앞 100m (전방 편대)
 LATERAL_OFFSET_M  = -40.0   # +면 우측, -면 좌측 윙맨 (부호로 좌/우 선택)
 VERTICAL_OFFSET_M = 0.0
-BLEND_RADIUS_M    = 300.0
-RENDEZVOUS_M      = 1500.0
-RENDEZVOUS_SPEED  = 260.0
+BLEND_RADIUS_M    = 400.0   # 이 거리 안에서 리더 헤딩으로 수렴(velocity match) — 약간 키워 weaving 완화
+RENDEZVOUS_M      = 2500.0  # 이 거리 밖에선 '리더+여유'로 추격, 안에선 거리비례 보정
+CATCHUP_MARGIN    = 50.0    # 먼거리 추격 시 리더보다 이만큼만 빠르게(절대속도 아님 → 느린 리더도 안 지나침)
 KP_SPEED          = 0.05    # along-track 위치오차(m) → 목표속도 가감(m/s)
-ALONG_SPD_MIN     = -20.0
-ALONG_SPD_MAX     = 30.0
-MIN_FORM_SPEED    = 180.0   # 편대 목표속도 하한(실속 방지)
+ALONG_SPD_MIN     = -60.0   # 앞질렀을 때 더 강하게 감속해 리더 뒤로 복귀
+ALONG_SPD_MAX     = 50.0    # 뒤처지면 따라잡기(단 기체 최고속도에서 포화)
+MIN_FORM_SPEED    = 70.0    # 실속 하한(기체 최저속도)만. 그 외엔 리더 속도를 그대로 추종 →
+                            # 리더 속도가 변해도(빠르든 느리든) UAV가 매칭해 위치 유지
 MIN_AGL_M         = 60.0    # 슬롯 고도 하한 = 스폰 + 이 값 (지면 유도 방지)
 
 
@@ -149,6 +155,94 @@ class HoldSetpoint(ActionWithROSTopic):
     def _build_message(self, agent, blackboard):
         agent.ros_bridge.node.get_logger().info(
             f"[HoldSetpoint] name={self._own} hdg={self._hdg:.0f} alt={self._alt:.0f} Vtgt={self._spd:.0f}")
+        return _setpoint(self._own, self._hdg, self._alt, target_speed=self._spd)
+
+    def _interpret_publish(self, msg, agent, blackboard) -> Status:
+        return Status.RUNNING
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OrbitLeader — 리더 UAV: 이륙 후 고도·속도 유지하며 계속 선회(오빗)
+# ══════════════════════════════════════════════════════════════════════════════
+class OrbitLeader(ActionWithROSTopic):
+    """상태구독 없이 고정 고도·속도를 유지하되 heading을 매 틱 turn_rate만큼 증가시켜
+       원을 그리며 비행. 처음 straight_time_s 동안은 직진(이륙/상승 안정화) 후 선회 시작.
+       항상 RUNNING. (윙맨은 리더 yaw로 슬롯이 회전하므로 이 선회를 그대로 추종)"""
+
+    def __init__(self, name, agent, own_name=OWN_NAME, altitude_m=1000.0,
+                 target_speed_mps=200.0, start_heading_deg=RUNWAY_HEADING_DEG,
+                 turn_rate_dps=5.0, straight_time_s=20.0, tick_rate_hz=10.0):
+        super().__init__(name, agent, (AircraftSetpoint, _SETPOINT_TOPIC))
+        self._own      = own_name
+        self._alt      = float(altitude_m)
+        self._spd      = float(target_speed_mps)
+        self._hdg      = float(start_heading_deg)
+        self._rate     = float(turn_rate_dps)      # 선회율 (deg/s, +면 우선회)
+        self._straight = float(straight_time_s)    # 이 시간 동안 직진(이륙) 후 선회
+        self._dt       = 1.0 / float(tick_rate_hz)
+        self._t        = 0.0
+
+    def _build_message(self, agent, blackboard):
+        self._t += self._dt
+        turning = self._t >= self._straight
+        if turning:
+            self._hdg = (self._hdg + self._rate * self._dt) % 360.0
+        agent.ros_bridge.node.get_logger().info(
+            f"[OrbitLeader] t={self._t:.0f}s {'선회' if turning else '직진(이륙)'} "
+            f"hdg={self._hdg:.0f} alt={self._alt:.0f} Vtgt={self._spd:.0f} rate={self._rate:.0f}dps")
+        return _setpoint(self._own, self._hdg, self._alt, target_speed=self._spd)
+
+    def _interpret_publish(self, msg, agent, blackboard) -> Status:
+        return Status.RUNNING
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RandomLeader — 리더 UAV: 무작위 기동 비행
+# ══════════════════════════════════════════════════════════════════════════════
+class RandomLeader(ActionWithROSTopic):
+    """상태구독 없이 무작위로 기동. straight_time_s 동안 직진 이륙/상승 후,
+       change_interval_s 마다 새 목표를 랜덤으로 뽑음: heading=현재±max_turn_deg,
+       altitude=[alt_min,alt_max], speed=[spd_min,spd_max]. heading은 max_rate_dps로
+       부드럽게 슬루(급기동 방지). 항상 RUNNING. seed>0이면 재현 가능.
+       (윙맨은 리더 상태를 읽어 이 무작위 기동을 편대로 추종)"""
+
+    def __init__(self, name, agent, own_name=OWN_NAME,
+                 start_heading_deg=RUNWAY_HEADING_DEG,
+                 altitude_m=1000.0, target_speed_mps=200.0,
+                 max_rate_dps=6.0, change_interval_s=8.0, max_turn_deg=120.0,
+                 alt_min=800.0, alt_max=1300.0, spd_min=180.0, spd_max=250.0,
+                 straight_time_s=20.0, seed=0, tick_rate_hz=10.0):
+        super().__init__(name, agent, (AircraftSetpoint, _SETPOINT_TOPIC))
+        self._own      = own_name
+        self._hdg      = float(start_heading_deg)   # 명령 heading(슬루됨)
+        self._tgt_hdg  = float(start_heading_deg)   # 무작위 목표 heading
+        self._alt      = float(altitude_m)
+        self._spd      = float(target_speed_mps)
+        self._rate     = float(max_rate_dps)
+        self._interval = float(change_interval_s)
+        self._maxturn  = float(max_turn_deg)
+        self._alt_rng  = (float(alt_min), float(alt_max))
+        self._spd_rng  = (float(spd_min), float(spd_max))
+        self._straight = float(straight_time_s)
+        self._dt       = 1.0 / float(tick_rate_hz)
+        self._t        = 0.0
+        self._t_change = 0.0
+        self._rng      = random.Random(int(seed)) if int(seed) else random.Random()
+
+    def _build_message(self, agent, blackboard):
+        self._t += self._dt
+        if self._t >= self._straight:
+            if self._t - self._t_change >= self._interval:      # 주기마다 새 무작위 목표
+                self._t_change = self._t
+                self._tgt_hdg = (self._hdg + self._rng.uniform(-self._maxturn, self._maxturn)) % 360.0
+                self._alt     = self._rng.uniform(*self._alt_rng)
+                self._spd     = self._rng.uniform(*self._spd_rng)
+            d    = ((self._tgt_hdg - self._hdg + 180.0) % 360.0) - 180.0   # 최단각
+            step = clamp(d, -self._rate * self._dt, self._rate * self._dt) # 슬루 제한
+            self._hdg = (self._hdg + step) % 360.0
+        agent.ros_bridge.node.get_logger().info(
+            f"[RandomLeader] t={self._t:.0f}s hdg={self._hdg:.0f}→{self._tgt_hdg:.0f} "
+            f"alt={self._alt:.0f} Vtgt={self._spd:.0f}")
         return _setpoint(self._own, self._hdg, self._alt, target_speed=self._spd)
 
     def _interpret_publish(self, msg, agent, blackboard) -> Status:
@@ -325,10 +419,11 @@ class MaintainFormation(ActionWithROSTopic):
         # 속도: 멀면 따라잡기(리더+50), 가까우면 리더+along closure (하한 MIN_FORM_SPEED)
         dist_to_leader = math.hypot(lx - ox, ly - oy)
         if dist_to_leader > RENDEZVOUS_M:
-            speed = max(RENDEZVOUS_SPEED, lspd + 50.0)
+            speed = lspd + CATCHUP_MARGIN        # 멀면 '리더+여유'로 추격 (리더 속도에 상대)
         else:
-            along = dx * fx + dy * fy            # +면 슬롯 앞(뒤처짐)→가속
-            speed = max(MIN_FORM_SPEED, lspd + clamp(self._kp * along, ALONG_SPD_MIN, ALONG_SPD_MAX))
+            along = dx * fx + dy * fy            # +면 슬롯 앞(뒤처짐)→가속, -면 앞질러→감속
+            speed = lspd + clamp(self._kp * along, ALONG_SPD_MIN, ALONG_SPD_MAX)
+        speed = max(MIN_FORM_SPEED, speed)        # 실속 하한만 — 나머진 리더 속도를 그대로 추종
 
         agent.ros_bridge.node.get_logger().info(
             f"[MaintainFormation] 슬롯거리={dist:.0f}m 리더거리={dist_to_leader:.0f}m "

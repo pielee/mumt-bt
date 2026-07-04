@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt">
+
+    <!-- ===== 윙맨 UAV = F16_UAV2 : 리더 UAV(F16_UAV1)를 편대 추종 =====
+         유인기(M_F16)가 아니라 leader_name=F16_UAV1 을 리더로 삼는다.
+         리더 UAV가 스폰대비 80m 오르면 이륙 → 리더 뒤 100m·우측 40m 슬롯 유지. -->
+    <ReactiveSequence>
+      <GatherState own_name="F16_UAV2" leader_name="F16_UAV1"/>
+      <Sequence>
+        <WaitForLeaderTakeoff leader_airborne_climb_m="80" own_name="F16_UAV2"/>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="120" own_name="F16_UAV2"/>
+        <MaintainFormation own_name="F16_UAV2" aft_offset_m="100" lateral_offset_m="40" vertical_offset_m="0"
+                           blend_radius_m="400" kp_speed="0.05"/>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>
