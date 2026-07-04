@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-target-practice">
+
+    <!-- F16_UAV1 = 표적기 (에디터에서 Team=Enemy): 이륙 → 고도 1000m 직진 유지.
+         turn_rate_dps=0 → 선회 없이 직진. 반격하지 않는 표적.
+         피격되어 Falling이 되면 UE가 이 BT의 명령을 무시하고 하드오버 추락시킨다. -->
+    <ReactiveSequence>
+      <GatherCombatState own_name="F16_UAV1"/>
+      <Sequence>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="120" own_name="F16_UAV1"/>
+        <OrbitLeader own_name="F16_UAV1" altitude_m="1000" target_speed_mps="180"
+                     start_heading_deg="90" turn_rate_dps="0" straight_time_s="0"/>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>
