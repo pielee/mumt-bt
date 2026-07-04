@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-weapons-test">
+
+    <!-- F16_UAV2 무장 발사 테스트: 이륙 → 직진(120°, UAV1과 갈라짐) → 기총 점사 + 미사일 3발.
+         발사 시작 5초(UAV1보다 +2초)로 어긋나게 해 두 기체 연출을 구분해서 관찰. -->
+    <ReactiveSequence>
+      <GatherCombatState own_name="F16_UAV2"/>
+      <Sequence>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="120" own_name="F16_UAV2"/>
+        <WeaponTestFire own_name="F16_UAV2" heading_deg="120" target_speed_mps="200"
+                        start_delay_s="5" gun_burst_s="3" gun_pause_s="3"
+                        missile_interval_s="8" missile_shots="3"/>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>

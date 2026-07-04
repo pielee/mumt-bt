@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-weapons-test">
+
+    <!-- F16_UAV1 무장 발사 테스트: 이륙 → 직진(90°) → 기총 점사 반복 + 미사일 3발.
+         팀/표적 무관 무조건 발사 — BT→UDP→WeaponComponent→BP 연출 체인 확인용. -->
+    <ReactiveSequence>
+      <GatherCombatState own_name="F16_UAV1"/>
+      <Sequence>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="120" own_name="F16_UAV1"/>
+        <WeaponTestFire own_name="F16_UAV1" heading_deg="90" target_speed_mps="200"
+                        start_delay_s="3" gun_burst_s="3" gun_pause_s="3"
+                        missile_interval_s="8" missile_shots="3"/>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>
