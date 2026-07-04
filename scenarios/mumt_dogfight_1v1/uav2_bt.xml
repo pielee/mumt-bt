@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-dogfight-1v1">
+
+    <!-- ===== UAV2 = 아군(FriendlyUAV) : 이륙 → 적 팀 생존 시 교전, 전멸 시 선회 대기 =====
+         전제: 에디터에서 F16_UAV2 폰에 UHealthComponent(Team=FriendlyUAV) + UWeaponComponent 부착.
+         BT는 5006의 team/destroyed로 적(=enemy)을 식별해 pure pursuit + WEZ 방아쇠. -->
+    <ReactiveSequence>
+      <GatherCombatState own_name="F16_UAV2"/>
+      <Sequence>
+        <Takeoff runway_heading_deg="90" climb_target_m="1000" uav_airborne_climb_m="120" own_name="F16_UAV2"/>
+        <Fallback>
+          <Sequence>
+            <ConditionEnemyAlive/>
+            <EngageTarget own_name="F16_UAV2" engage_speed_mps="250"
+                          missile_range_m="8000" missile_bearing_deg="15" missile_cooldown_sec="10"
+                          gun_range_m="1500" gun_bearing_deg="5"/>
+          </Sequence>
+          <!-- 적 전멸 → 고도 1000m 선회 대기 (기존 노드 재사용) -->
+          <OrbitLeader own_name="F16_UAV2" altitude_m="1000" target_speed_mps="200"
+                       start_heading_deg="90" turn_rate_dps="5" straight_time_s="0"/>
+        </Fallback>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>

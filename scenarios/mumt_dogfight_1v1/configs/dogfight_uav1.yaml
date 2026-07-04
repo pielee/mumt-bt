@@ -1,0 +1,14 @@
+scenario:
+  environment: scenarios.mumt_dogfight_1v1
+
+agent:
+  namespaces: "/F16_UAV1"            # 적기 (에디터에서 Team=Enemy 지정)
+  behavior_tree_xml: "uav1_bt.xml"
+
+bt_runner:
+  bt_tick_rate: 10.0
+  bt_visualiser:
+    enabled: True
+    screen_width: 600
+    screen_height: 600
+  profiling_mode: False
