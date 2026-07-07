@@ -51,7 +51,7 @@ class FormationFlight(ActionWithROSTopic):
     def __init__(self, name, agent, own_name="", leader_name="M_F16",
                  front_m=100.0, right_m=40.0, up_m=0.0, carrot_m=800.0,
                  kp_speed=0.05, closure_min_mps=-60.0, closure_max_mps=60.0,
-                 min_speed_mps=70.0, max_speed_mps=280.0,
+                 min_speed_mps=70.0, max_speed_mps=335.0,   # 상한=JSBSim f16 실측 수평 지속최대(~335m/s@0.3~1.2km, M0.98)
                  runway_heading_deg=90.0,
                  takeoff_forward_m=3000.0, takeoff_up_m=800.0,
                  takeoff_speed_mps=220.0, takeoff_climb_m=150.0):
