@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-manned-formation">
+
+    <!-- ===== F16_UAV1 : 자체 이륙 → 유인기(M_F16) 우측 전방 슬롯 편대 =====
+         슬롯 = 유인기 앞 100m · 우측 40m · 동일 고도. StickController 조준 제어기 기반
+         (캐럿 조준 + along-track 속도법칙). 유인기는 조이스틱으로 사람이 조종.
+         전제: 제어기 교체 UE 빌드 + custom_msgs 재빌드(use_waypoint/target_*). -->
+    <ReactiveSequence>
+      <GatherState own_name="F16_UAV1" leader_name="M_F16"/>
+      <FormationFlight own_name="F16_UAV1" leader_name="M_F16"
+                       front_m="100" right_m="40" up_m="0" carrot_m="800"
+                       kp_speed="0.05" closure_min_mps="-60" closure_max_mps="60"
+                       min_speed_mps="70" max_speed_mps="280"
+                       runway_heading_deg="90" takeoff_forward_m="3000" takeoff_up_m="800"
+                       takeoff_speed_mps="220" takeoff_climb_m="150"/>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>
