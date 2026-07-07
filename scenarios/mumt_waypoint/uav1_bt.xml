@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-waypoint">
+
+    <!-- ===== F16_UAV1 : StickController(Controller_CY) 웨이포인트 추종 =====
+         Takeoff 없음 — 첫 웨이포인트(동쪽 3km+1000m)를 조준해 지상에서부터 이륙·상승.
+         전제: UE Phase(제어기 교체) 빌드 + custom_msgs 재빌드(use_waypoint/target_* 추가). -->
+    <ReactiveSequence>
+      <GatherOwnState own_name="F16_UAV1"/>
+      <FollowWaypoint own_name="F16_UAV1" cruise_speed_mps="220" accept_radius_m="400" loop="True"/>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>
