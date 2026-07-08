@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-intercept-enemy">
+
+    <!-- ===== F16_UAV1 = 적기(Enemy) : 이륙 → 스폰 동쪽 3km 중심·반경 2km 원 선회 =====
+         전제: 에디터에서 UHealthComponent(Team=Enemy) + UWeaponComponent 부착.
+         반경 2km·180m/s = 폐루프 검증값 (8점 순회, 반경오차 ~113m). -->
+    <ReactiveSequence>
+      <GatherOwnState own_name="F16_UAV1"/>
+      <OrbitPoint own_name="F16_UAV1"
+                  center_north_m="0" center_east_m="3000" radius_m="2000"
+                  orbit_alt_m="800" speed_mps="180" num_points="8" accept_radius_m="400"
+                  runway_heading_deg="90" takeoff_forward_m="3000" takeoff_up_m="800"
+                  takeoff_speed_mps="220" takeoff_climb_m="150" min_agl_m="150"/>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>

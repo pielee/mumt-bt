@@ -86,12 +86,14 @@ class FollowWaypoint(ActionWithROSTopic):
        own 순간 결손 시 마지막 setpoint 재발행(래칭)."""
 
     def __init__(self, name, agent, own_name="",
-                 cruise_speed_mps=220.0, accept_radius_m=400.0, loop=True):
+                 cruise_speed_mps=220.0, accept_radius_m=400.0, loop=True,
+                 min_agl_m=150.0):    # 고도 하한 가드: target_z ≥ 스폰+이 값
         super().__init__(name, agent, (AircraftSetpoint, _SETPOINT_TOPIC))
         self._own_name = own_name or (getattr(agent, "agent_id", "") or "").strip("/")
         self._speed    = float(cruise_speed_mps)
         self._radius   = float(accept_radius_m)
         self._loop     = bool(loop)
+        self._min_agl  = float(min_agl_m)
         self._wps      = list(DEFAULT_WAYPOINTS_NEU)
         self._idx      = 0
         self._spawn    = None       # (x0,y0,z0) UE cm, 최초관측 래칭
@@ -113,6 +115,7 @@ class FollowWaypoint(ActionWithROSTopic):
 
         dN, dE, dU = self._wps[self._idx]
         tx, ty, tz = self._target_ue_cm(dN, dE, dU)
+        tz = max(tz, self._spawn[2] + self._min_agl * 100.0)   # 고도 하한 가드
 
         msg = AircraftSetpoint()
         msg.aircraft_name    = _own_routing_name(own, self._own_name)

@@ -38,6 +38,14 @@ from scenarios.mumt.bt_nodes import (
 BTNodeList.CONDITION_NODES.extend(["GatherCombatState", "ConditionEnemyAlive"])
 BTNodeList.ACTION_NODES.extend(["EngageTarget"])
 
+# 팀 적대 관계: 아군 진영(manned + friendly_uav) vs 적 진영(enemy).
+# "내 팀과 다른 팀 전부"로 판정하면 아군 무인기가 유인기를 적으로 오인한다.
+_HOSTILE = {
+    "manned":       ("enemy",),
+    "friendly_uav": ("enemy",),
+    "enemy":        ("manned", "friendly_uav"),
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GatherCombatState — own + 적 팀 생존 기체 목록 인지
@@ -84,7 +92,7 @@ class GatherCombatState(ConditionWithROSTopics):
         blackboard["own_team"]  = own_team
         blackboard["enemies"]   = [
             a for a in aircraft
-            if own_team and a.get("team") and a.get("team") != own_team
+            if a.get("team") in _HOSTILE.get(own_team, ())
             and not a.get("destroyed", False) and a is not own
         ]
 

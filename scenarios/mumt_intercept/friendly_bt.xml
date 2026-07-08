@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-intercept-friendly">
+
+    <!-- ===== F16_UAV2 = 아군(FriendlyUAV) : 이륙 → 적 생존 확인 → 추격·격추 → 선회 대기 =====
+         전제: 에디터에서 UHealthComponent(Team=Friendly UAV) + UWeaponComponent 부착.
+         유인기(M_F16)는 P2 적대관계 수정으로 표적에서 제외됨.
+         InterceptTarget: tail-chase로 적기 뒤 200m 수렴(검증: 거리오차 9m, LOS 7.5°)
+         → 기총(1500m·5°)/미사일(8km·15°·쿨다운10s) 방아쇠. -->
+    <ReactiveSequence>
+      <GatherCombatState own_name="F16_UAV2"/>
+      <Fallback>
+        <Sequence>
+          <ConditionEnemyAlive/>
+          <InterceptTarget own_name="F16_UAV2"
+                           standoff_m="200" kp_speed="0.15" chase_speed_max="265" min_speed_mps="70"
+                           gun_range_m="1500" gun_bearing_deg="5"
+                           missile_range_m="8000" missile_bearing_deg="15" missile_cooldown_sec="10"
+                           runway_heading_deg="90" takeoff_forward_m="3000" takeoff_up_m="800"
+                           takeoff_speed_mps="220" takeoff_climb_m="150" min_agl_m="150"/>
+        </Sequence>
+        <!-- 적 전멸 → 스폰 동쪽 3km 상공 선회 대기 -->
+        <OrbitPoint own_name="F16_UAV2"
+                    center_north_m="0" center_east_m="3000" radius_m="2000"
+                    orbit_alt_m="1000" speed_mps="200" num_points="8" accept_radius_m="400"
+                    runway_heading_deg="90" takeoff_forward_m="3000" takeoff_up_m="800"
+                    takeoff_speed_mps="220" takeoff_climb_m="150" min_agl_m="150"/>
+      </Fallback>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>

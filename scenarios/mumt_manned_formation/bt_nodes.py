@@ -54,7 +54,8 @@ class FormationFlight(ActionWithROSTopic):
                  min_speed_mps=70.0, max_speed_mps=335.0,   # 상한=JSBSim f16 실측 수평 지속최대(~335m/s@0.3~1.2km, M0.98)
                  runway_heading_deg=90.0,
                  takeoff_forward_m=3000.0, takeoff_up_m=800.0,
-                 takeoff_speed_mps=220.0, takeoff_climb_m=150.0):
+                 takeoff_speed_mps=220.0, takeoff_climb_m=150.0,
+                 min_agl_m=150.0):    # 고도 하한 가드: target_z ≥ 스폰+이 값 (지면 유도 방지)
         super().__init__(name, agent, (AircraftSetpoint, _SETPOINT_TOPIC))
         self._own_name  = own_name or (getattr(agent, "agent_id", "") or "").strip("/")
         self._front     = float(front_m)
@@ -71,6 +72,7 @@ class FormationFlight(ActionWithROSTopic):
         self._to_up     = float(takeoff_up_m)
         self._to_spd    = float(takeoff_speed_mps)
         self._to_climb  = float(takeoff_climb_m)
+        self._min_agl   = float(min_agl_m)
         self._spawn     = None          # (x,y,z) UE cm — own 최초 관측 래칭
         self._airborne  = False         # False=TAKEOFF, True=FORMATION
         self._last_msg  = None
@@ -126,6 +128,10 @@ class FormationFlight(ActionWithROSTopic):
             agent.ros_bridge.node.get_logger().info(
                 f"[FormationFlight] 슬롯거리={slot_dist:.0f}m along={along_m:+.0f}m "
                 f"Vtgt={speed:.0f} | 리더(hdg={lyaw:.0f} spd={lspd:.0f})")
+
+        # 고도 하한 가드: 리더가 저고도로 내려가도 스폰+min_agl 아래로는 안 따라감
+        # (편대 영상에서 지면 스침 실증 — 안전 가드)
+        vz = max(vz, self._spawn[2] + self._min_agl * 100.0)
 
         msg = AircraftSetpoint()
         msg.aircraft_name    = _own_routing_name(own, self._own_name)
