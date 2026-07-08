@@ -9,7 +9,7 @@
     <ReactiveSequence>
       <GatherState own_name="F16_UAV1" leader_name="M_F16"/>
       <FormationFlight own_name="F16_UAV1" leader_name="M_F16"
-                       front_m="100" right_m="40" up_m="0" carrot_m="800"
+                       front_m="100" right_m="40" up_m="0" carrot_m="400"
                        kp_speed="0.05" closure_min_mps="-60" closure_max_mps="60"
                        min_speed_mps="70" max_speed_mps="335"
                        runway_heading_deg="90" takeoff_forward_m="3000" takeoff_up_m="800"
