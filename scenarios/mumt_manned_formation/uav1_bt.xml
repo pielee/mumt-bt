@@ -11,7 +11,7 @@
       <GatherState own_name="F16_UAV1" leader_name="M_F16"/>
       <FormationGuidance own_name="F16_UAV1" leader_name="M_F16"
                          front_m="-80" right_m="100" up_m="0"
-                         min_speed_mps="70" max_speed_mps="335"
+                         min_speed_mps="120" max_speed_mps="335"
                          runway_heading_deg="90" takeoff_forward_m="3000" takeoff_up_m="800"
                          takeoff_speed_mps="220" takeoff_climb_m="150" min_agl_m="150" bt_rate_hz="10"/>
     </ReactiveSequence>

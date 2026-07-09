@@ -40,7 +40,7 @@ class FormationGuidance(ActionWithROSTopic):
 
     def __init__(self, name, agent, own_name="", leader_name="M_F16",
                  front_m=-80.0, right_m=100.0, up_m=0.0,
-                 min_speed_mps=70.0, max_speed_mps=335.0,
+                 min_speed_mps=120.0, max_speed_mps=335.0,
                  runway_heading_deg=90.0, takeoff_forward_m=3000.0, takeoff_up_m=800.0,
                  takeoff_speed_mps=220.0, takeoff_climb_m=150.0, min_agl_m=150.0,
                  bt_rate_hz=10.0):
@@ -56,8 +56,12 @@ class FormationGuidance(ActionWithROSTopic):
         self._to_climb = float(takeoff_climb_m)
         self._min_agl  = float(min_agl_m)
         self._spawn_alt = None           # own 최초관측 고도(UE-Z m) — 상대 판정·고도가드 기준
+        self._ldr_spawn_alt = None       # 리더 최초관측 고도 — 리더 이륙 판정 기준
         self._airborne  = False
+        self._ldr_airborne = False
         self._last_msg  = None
+
+    LEADER_AIRBORNE_CLIMB_M = 80.0       # 리더가 스폰 대비 +이만큼 오르면 '이륙' 간주
 
     def _build_message(self, agent, blackboard):
         own = blackboard.get("own_state")
@@ -68,22 +72,35 @@ class FormationGuidance(ActionWithROSTopic):
         if self._spawn_alt is None:
             self._spawn_alt = oalt
 
+        # 리더 이륙 판정 (PIE 2026-07-09: 리더 지상활주 중 편대 진입 → V=70 실속권 명령
+        # + 지상 슬롯 추종이 발산의 시발점 → 리더가 뜨기 전엔 편대 전환 금지)
+        leader = blackboard.get("leader_state")
+        if leader:
+            lalt = _alt_m(leader)
+            if self._ldr_spawn_alt is None:
+                self._ldr_spawn_alt = lalt
+            if not self._ldr_airborne and lalt - self._ldr_spawn_alt >= self.LEADER_AIRBORNE_CLIMB_M:
+                self._ldr_airborne = True
+                agent.ros_bridge.node.get_logger().info(
+                    f"[FormationGuidance] 리더 이륙 감지(+{lalt - self._ldr_spawn_alt:.0f}m)")
+
         climb_m = oalt - self._spawn_alt
         if not self._airborne and climb_m >= self._to_climb:
             self._airborne = True
             agent.ros_bridge.node.get_logger().info(
-                f"[FormationGuidance] 이륙 완료(+{climb_m:.0f}m) → 편대 모드 전환 (유도=UE 60Hz)")
+                f"[FormationGuidance] 이륙 완료(+{climb_m:.0f}m)")
 
         msg = AircraftSetpoint()
         msg.aircraft_name = _own_routing_name(own, self._own_name)
 
-        if not self._airborne:
-            # ── TAKEOFF: direct 명령 (내루프가 이륙) ──
+        if not (self._airborne and self._ldr_airborne):
+            # ── TAKEOFF/HOLD: direct 명령 — 내 이륙 중이거나 리더가 아직 지상 ──
             msg.heading_deg      = float(self._rwy_hdg % 360.0)
             msg.altitude_m       = float(self._spawn_alt + self._to_up)
             msg.target_speed_mps = float(self._to_spd)
+            phase = "이륙 상승" if not self._airborne else "리더 대기(상공 홀드)"
             agent.ros_bridge.node.get_logger().info(
-                f"[FormationGuidance] 이륙 상승 +{climb_m:.0f}/{self._to_climb:.0f}m")
+                f"[FormationGuidance] {phase} +{climb_m:.0f}m")
         else:
             # ── FORMATION: 모드 지정만 — 슬롯 계산은 UE FormationGuidance.h ──
             msg.guidance_mode = "formation"
