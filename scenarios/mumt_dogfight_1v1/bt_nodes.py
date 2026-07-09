@@ -185,7 +185,6 @@ class EngageTarget(ActionWithROSTopic):
         bearing = unit_xy_to_heading(target.get("x", 0.0) * CM_TO_M - ox,
                                      target.get("y", 0.0) * CM_TO_M - oy)
         brg_err = abs(((bearing - oyaw + 180.0) % 360.0) - 180.0)   # wrap-around
-        alt     = _alt_m(target)
 
         # 미사일: WEZ + 쿨다운 + 잔탄 (missile_count 필드 없으면 발사 허용)
         now = time.monotonic()
@@ -201,12 +200,17 @@ class EngageTarget(ActionWithROSTopic):
 
         agent.ros_bridge.node.get_logger().info(
             f"[EngageTarget] tgt={target.get('aircraft_name')} 거리={dist:.0f}m "
-            f"방위오차={brg_err:.1f}° hp={target.get('hp', '?')} | "
+            f"방위오차={brg_err:.1f}° hp={target.get('hp', '?')} | attack모드(UE 60Hz) "
             f"gun={'ON' if gun else 'off'} msl_id={self._fire_id}"
             f"{' ★발사' if fired else ''}")
 
-        msg = _setpoint(_own_routing_name(own, self._own_name), bearing, alt,
-                        target_speed=self._speed)
+        # 추격 유도는 UE attack 모드(표적 pawn 직독, 60Hz) — BT는 표적지정+방아쇠만 (Phase 4)
+        msg = AircraftSetpoint()
+        msg.aircraft_name   = _own_routing_name(own, self._own_name)
+        msg.guidance_mode   = "attack"
+        msg.target_name     = str(target.get("aircraft_name", ""))
+        msg.min_speed_mps   = 70.0
+        msg.max_speed_mps   = float(self._speed)    # 교전 속도 상한(구 engage_speed)
         msg.gun_firing      = bool(gun)
         msg.missile_fire_id = self._fire_id
         self._last_msg = msg

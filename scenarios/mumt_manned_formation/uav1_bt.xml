@@ -2,10 +2,11 @@
 <root BTCPP_format="4">
   <BehaviorTree ID="mumt-manned-formation">
 
-    <!-- ===== F16_UAV1 : 자체 이륙 → 유인기(M_F16) 슬롯 편대 (계층형 유도 → UE PID 내루프) =====
-         슬롯 = 리더 뒤 80m · 우측 100m · 동일 고도. FormationGuidance가 heading/alt/speed/roll_ff
-         명령을 산출하고 UE 내루프가 추종. GetStick(조준) 대체 — 선회 편대 가능(roll_ff 피드포워드).
-         전제: 제어기 교체 UE 빌드 + custom_msgs 재빌드(roll_ff_deg). 유인기는 조이스틱 조종. -->
+    <!-- ===== F16_UAV1 : 자체 이륙 → 유인기(M_F16) 슬롯 편대 (Phase 4: 인엔진 유도) =====
+         슬롯 = 리더 뒤 80m · 우측 100m · 동일 고도. BT는 이륙(direct) 후
+         guidance_mode="formation"만 발행 — 슬롯·ω×r·벡터필드·roll_ff 계산은 UE가
+         리더 pawn 직독으로 60Hz 수행 (V1 폐루프: 3°/s 4.5m, 5°/s+상승 12.5m).
+         전제: Phase 4 UE 빌드 + custom_msgs 재빌드(guidance_mode). 유인기는 조이스틱. -->
     <ReactiveSequence>
       <GatherState own_name="F16_UAV1" leader_name="M_F16"/>
       <FormationGuidance own_name="F16_UAV1" leader_name="M_F16"
