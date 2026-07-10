@@ -25,7 +25,7 @@ from modules.base_bt_nodes_ros import ConditionWithROSTopics, ActionWithROSTopic
 
 # 기존 노드/헬퍼 재사용 (import 부수효과로 GatherState 등록)
 from scenarios.mumt.bt_nodes import (
-    GatherState, clamp, heading_to_unit_xy, _alt_m, _own_routing_name,
+    GatherState, clamp, heading_to_unit_xy, unit_xy_to_heading, _alt_m, _own_routing_name,
     CM_TO_M, _STATE_TOPIC, _SETPOINT_TOPIC,
 )
 
@@ -95,10 +95,22 @@ class FormationGuidance(ActionWithROSTopic):
 
         if not (self._airborne and self._ldr_airborne):
             # ── TAKEOFF/HOLD: direct 명령 — 내 이륙 중이거나 리더가 아직 지상 ──
-            msg.heading_deg      = float(self._rwy_hdg % 360.0)
+            heading = self._rwy_hdg
+            speed   = self._to_spd
+            phase   = "이륙 상승"
+            if self._airborne:
+                # 홀드: 활주로 방향 직진이 아니라 리더 쪽으로 선회 대기.
+                # (직진 홀드는 리더 이륙까지 km급 이탈 → 편대 진입 초기변위가 원거리
+                #  캡처 불안정을 격발 — 2026-07-10 PIE ±4km S-위빙의 시발점)
+                phase = "리더 대기(상공 선회)"
+                if leader:
+                    heading = unit_xy_to_heading(
+                        leader.get("x", 0.0) - own.get("x", 0.0),
+                        leader.get("y", 0.0) - own.get("y", 0.0))
+                    speed = 150.0        # 저속 선회 → 선회반경·이탈거리 최소화
+            msg.heading_deg      = float(heading % 360.0)
             msg.altitude_m       = float(self._spawn_alt + self._to_up)
-            msg.target_speed_mps = float(self._to_spd)
-            phase = "이륙 상승" if not self._airborne else "리더 대기(상공 홀드)"
+            msg.target_speed_mps = float(speed)
             agent.ros_bridge.node.get_logger().info(
                 f"[FormationGuidance] {phase} +{climb_m:.0f}m")
         else:

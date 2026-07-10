@@ -1,0 +1,179 @@
+"""BT ModeManager 회귀 — formation/attack 모드 발행 + 이륙/홀드 direct + 방아쇠 + XML 바인딩.
+
+ROS 없이 실행 가능한 스텁 하네스 (std_msgs/custom_msgs/modules 목킹).
+실행: python3 tools/verify_bt_modes.py   (py_bt_ros 루트에서)
+"""
+import sys, os, types, enum, math, inspect
+import xml.etree.ElementTree as ET
+sys.dont_write_bytecode = True
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+
+class String:
+    def __init__(self, data=""): self.data = data
+m=types.ModuleType("std_msgs"); mm=types.ModuleType("std_msgs.msg"); mm.String=String
+sys.modules["std_msgs"]=m; sys.modules["std_msgs.msg"]=mm
+class AircraftSetpoint:
+    def __init__(self):
+        self.aircraft_name=""; self.heading_deg=0.0; self.altitude_m=0.0; self.roll_ff_deg=0.0
+        self.throttle_norm=0.0; self.target_speed_mps=0.0; self.launch_missile=False
+        self.gun_firing=False; self.missile_fire_id=0
+        self.guidance_mode=""; self.leader_name=""; self.target_name=""
+        self.slot_front_m=0.0; self.slot_right_m=0.0; self.slot_up_m=0.0
+        self.min_speed_mps=0.0; self.max_speed_mps=0.0; self.min_alt_m=0.0
+        self.use_waypoint=False; self.target_x=0.0; self.target_y=0.0; self.target_z=0.0
+c=types.ModuleType("custom_msgs"); cm=types.ModuleType("custom_msgs.msg"); cm.AircraftSetpoint=AircraftSetpoint
+sys.modules["custom_msgs"]=c; sys.modules["custom_msgs.msg"]=cm
+class BTNodeList:
+    CONTROL_NODES=['Sequence','Fallback','ReactiveSequence','ReactiveFallback','Parallel']
+    ACTION_NODES=['AssignTask']; CONDITION_NODES=['AlwaysFailure']; DECORATOR_NODES=[]
+class Status(enum.Enum): SUCCESS=1; FAILURE=2; RUNNING=3
+class Node:
+    def __init__(self,name): self.name=name; self.type=None; self.status=None; self.is_expanded=False
+    def halt(self): pass
+class _Ctl(Node):
+    def __init__(self,name,children): super().__init__(name); self.children=children
+class Sequence(_Ctl): pass
+class ReactiveSequence(_Ctl): pass
+class Fallback(_Ctl): pass
+class ReactiveFallback(_Ctl): pass
+bbn=types.ModuleType("modules.base_bt_nodes")
+for n,o in [("BTNodeList",BTNodeList),("Status",Status),("Node",Node),("Sequence",Sequence),
+            ("ReactiveSequence",ReactiveSequence),("Fallback",Fallback),("ReactiveFallback",ReactiveFallback)]:
+    setattr(bbn,n,o)
+class ConditionWithROSTopics(Node):
+    def __init__(self,name,agent,mtt): super().__init__(name); self._cache={}
+class ActionWithROSTopic(Node):
+    def __init__(self,name,agent,ts): super().__init__(name)
+bbnr=types.ModuleType("modules.base_bt_nodes_ros")
+bbnr.ConditionWithROSTopics=ConditionWithROSTopics; bbnr.ActionWithROSTopic=ActionWithROSTopic
+pkg=types.ModuleType("modules"); pkg.__path__=[]
+sys.modules["modules"]=pkg; sys.modules["modules.base_bt_nodes"]=bbn; sys.modules["modules.base_bt_nodes_ros"]=bbnr
+class _Log:
+    def info(self,*a,**k): pass
+    def warn(self,*a,**k): pass
+class _N:
+    def get_logger(self): return _Log()
+class _B:
+    def __init__(self): self.node=_N()
+class Agent:
+    def __init__(self,a): self.ros_bridge=_B(); self.agent_id=a
+
+import importlib
+FG = importlib.import_module("scenarios.mumt_manned_formation.bt_nodes")
+IC = importlib.import_module("scenarios.mumt_intercept.bt_nodes")
+DF = importlib.import_module("scenarios.mumt_dogfight_1v1.bt_nodes")
+
+PASS=0; FAIL=0
+def check(l,cond,d=""):
+    global PASS,FAIL
+    if cond: PASS+=1; print(f"  ✓ {l}")
+    else: FAIL+=1; print(f"  ✗ {l}  {d}")
+_dh=lambda a,b:((a-b+180)%360)-180
+
+def ac(name, e_m, n_m, alt_m, yaw=90.0, spd=200.0, **kw):
+    d={"aircraft_name":name, "x":e_m*100.0, "y":-n_m*100.0, "z":alt_m*100.0, "yaw":yaw, "speed_mps":spd}
+    d.update(kw); return d
+
+print("== [1] FormationGuidance: 이륙(direct) → 홀드 → 편대(mode) ==")
+fg = FG.FormationGuidance("FormationGuidance", Agent("F16_UAV1"), own_name="F16_UAV1",
+                          leader_name="M_F16", front_m=-80, right_m=100, up_m=0,
+                          takeoff_climb_m=150, min_agl_m=150)
+bb = {"own_state": ac("F16_UAV1", 0,0,100, spd=0), "leader_state": ac("M_F16",0,0,100,spd=0)}
+msg = fg._build_message(Agent("F16_UAV1"), bb)
+check("이륙: direct(모드 빈값)", msg.guidance_mode=="")
+check("이륙: 활주로 헤딩 90", abs(_dh(msg.heading_deg,90))<1e-6)
+check("이륙: 고도 스폰+800", abs(msg.altitude_m-900)<1e-6, f"{msg.altitude_m}")
+check("이륙: 속도 220", abs(msg.target_speed_mps-220)<1e-6)
+check("RUNNING", fg._interpret_publish(msg,None,None)==Status.RUNNING)
+# own은 이륙했지만 리더가 아직 지상 → 홀드(direct 유지) [PIE 2026-07-09 수정]
+bb = {"own_state": ac("F16_UAV1", 0,500,100+150, spd=200), "leader_state": ac("M_F16",0,0,100,spd=30)}
+msg = fg._build_message(Agent("F16_UAV1"), bb)
+check("리더 지상 → 홀드(direct 유지)", msg.guidance_mode=="")
+# F1 (2026-07-10): 홀드는 직진이 아니라 리더 방향 선회 대기 — own이 리더 북쪽 500m → 남(180°)
+check("홀드: 리더 방향 헤딩(180)", abs(_dh(msg.heading_deg,180))<1.0, f"{msg.heading_deg}")
+check("홀드: 저속 선회 150", abs(msg.target_speed_mps-150)<1e-6, f"{msg.target_speed_mps}")
+# 리더 +80m 상승 → 편대 전환
+bb = {"own_state": ac("F16_UAV1", 0,500,100+150, spd=200), "leader_state": ac("M_F16",0,300,100+80,spd=150)}
+msg = fg._build_message(Agent("F16_UAV1"), bb)
+check("리더 이륙(+80m) → formation 모드", msg.guidance_mode=="formation")
+check("leader_name=M_F16", msg.leader_name=="M_F16")
+check("슬롯 (-80,100,0)", (msg.slot_front_m,msg.slot_right_m,msg.slot_up_m)==(-80.0,100.0,0.0))
+check("속도한계 (120,335)", (msg.min_speed_mps,msg.max_speed_mps)==(120.0,335.0))
+check("고도가드 = 스폰+150", abs(msg.min_alt_m-250)<1e-6, f"{msg.min_alt_m}")
+check("편대: 유도 숫자 미기입(heading=0)", msg.heading_deg==0.0)
+last = msg
+check("own 결손 → 래칭", fg._build_message(Agent("F16_UAV1"), {"own_state":None,"leader_state":None}) is last)
+
+print("== [2] InterceptTarget: 이륙(direct) → attack 모드 + 방아쇠 ==")
+def mk_it():
+    it = IC.InterceptTarget("InterceptTarget", Agent("F16_UAV2"), own_name="F16_UAV2")
+    it._airborne=True; it._spawn=(0.0,0.0,10000.0)   # spawn z=100m(cm)
+    return it
+own = ac("F16_UAV2", 0,0,800, yaw=90)
+it = mk_it()
+enemy_far = ac("Enemy1", 5000,0,800, yaw=90, missile_count=1, hp=100)
+msg = it._build_message(Agent("F16_UAV2"), {"own_state":own, "enemies":[enemy_far]})
+check("교전: attack 모드", msg.guidance_mode=="attack")
+check("표적지정 Enemy1", msg.target_name=="Enemy1")
+check("고도가드 = 스폰100+150", abs(msg.min_alt_m-250)<1e-6, f"{msg.min_alt_m}")
+check("속도상한 265(추격)", abs(msg.max_speed_mps-265)<1e-6)
+check("5km·정조준 → 미사일 id=1", msg.missile_fire_id==1)
+check("5km → 기총 off", msg.gun_firing is False)
+it2 = mk_it()
+enemy_near = ac("Enemy1", 1000,0,800, yaw=90, missile_count=1, hp=100)
+msg = it2._build_message(Agent("F16_UAV2"), {"own_state":own, "enemies":[enemy_near]})
+check("1km·정조준 → 기총 ON", msg.gun_firing is True)
+it3 = mk_it()
+msg = it3._build_message(Agent("F16_UAV2"), {"own_state":own, "enemies":[ac("Enemy1",0,1000,800,yaw=0,missile_count=1)]})
+check("측방적 → 기총 off (방위오차)", msg.gun_firing is False)
+check("측방적도 attack 모드 유지", msg.guidance_mode=="attack")
+it4 = mk_it()
+it4._build_message(Agent("F16_UAV2"), {"own_state":own, "enemies":[enemy_near]})
+msg = it4._build_message(Agent("F16_UAV2"), {"own_state":own, "enemies":[]})
+check("적 전멸 → 기총 off + SUCCESS", msg.gun_firing is False and it4._interpret_publish(msg,None,None)==Status.SUCCESS)
+itT = IC.InterceptTarget("InterceptTarget", Agent("F16_UAV2"), own_name="F16_UAV2")
+msg = itT._build_message(Agent("F16_UAV2"), {"own_state":ac("F16_UAV2",0,0,0,spd=0), "enemies":[enemy_far]})
+check("지상: 이륙 direct(모드 빈값)", msg.guidance_mode=="")
+check("이륙: 활주로 90", abs(_dh(msg.heading_deg,90))<1.0)
+
+print("== [3] EngageTarget(dogfight): attack 모드 ==")
+et = DF.EngageTarget("EngageTarget", Agent("F16_UAV1"), own_name="F16_UAV1")
+own_e = ac("F16_UAV1", 0,0,1000, yaw=90)
+msg = et._build_message(Agent("F16_UAV1"), {"own_state":own_e, "enemies":[ac("EnemyX",3000,0,1200,yaw=270,missile_count=1)]})
+check("attack 모드 + 표적 EnemyX", msg.guidance_mode=="attack" and msg.target_name=="EnemyX")
+check("속도상한 = engage_speed(250)", abs(msg.max_speed_mps-250)<1e-6)
+check("원거리 정조준 → 미사일", msg.missile_fire_id==1)
+et._build_message(Agent("F16_UAV1"), {"own_state":own_e, "enemies":[]})
+check("적 전멸 → SUCCESS", et._interpret_publish(msg,None,None)==Status.SUCCESS)
+
+print("== [4] OrbitPoint 회귀: direct 유지 ==")
+op = IC.OrbitPoint("OrbitPoint", Agent("F16_UAV1"), own_name="F16_UAV1")
+op._airborne=True; op._spawn=(0.0,0.0,0.0)
+msg = op._build_message(Agent("F16_UAV1"), {"own_state": ac("F16_UAV1",0,0,800)})
+check("선회: direct(모드 빈값)", msg.guidance_mode=="")
+check("선회: heading/alt 유효", 0.0<=msg.heading_deg<360.0 and msg.altitude_m>0)
+
+print("== [5] XML 바인딩 (formation uav1_bt.xml) ==")
+def conv(v):
+    if isinstance(v,str):
+        if v.isdigit() or (v.startswith('-') and v[1:].isdigit()): return int(v)
+        try: return float(v)
+        except ValueError: pass
+    return v
+bt_el = ET.parse(os.path.join(_ROOT,"scenarios/mumt_manned_formation/uav1_bt.xml")).getroot().find("BehaviorTree")
+for el in bt_el.iter():
+    if el.tag=="BehaviorTree": continue
+    if el.tag in BTNodeList.CONTROL_NODES:
+        check(f"제어 {el.tag}", hasattr(FG, el.tag)); continue
+    cls = getattr(FG, el.tag, None)
+    attrs = {k: conv(v) for k,v in el.attrib.items()}
+    try:
+        inspect.signature(cls.__init__).bind(None, el.tag, Agent("F16_UAV1"), **attrs)
+        cls(el.tag, Agent("F16_UAV1"), **attrs)
+        check(f"{el.tag} 등록+생성 OK", True)
+    except TypeError as e:
+        check(f"{el.tag} 바인딩", False, str(e))
+
+print(f"\n결과: PASS={PASS} FAIL={FAIL}")
+sys.exit(1 if FAIL else 0)
