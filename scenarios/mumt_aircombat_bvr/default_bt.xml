@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<root BTCPP_format="4">
-  <BehaviorTree ID="bvr-aircombat">
-    <Sequence>
-      <TakeOff target_altitude_m="1500.0" target_heading_deg="90.0" throttle="0.9"/>
-      <TurnRight target_heading_deg="180.0" target_altitude_m="1500.0" throttle="0.8"/>
-    </Sequence>
-  </BehaviorTree>
-</root>
