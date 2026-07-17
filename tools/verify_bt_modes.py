@@ -9,6 +9,10 @@ sys.dont_write_bytecode = True
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
+# ControlV2 sequence 영속 저장을 테스트용 임시 파일로 격리 (실제 ~/.mumt 오염 방지, 결정론적)
+import tempfile as _tf
+os.environ["MUMT_CONTROLV2_SEQ_STORE"] = os.path.join(_tf.mkdtemp(), "cv2seq.json")
+
 class String:
     def __init__(self, data=""): self.data = data
 m=types.ModuleType("std_msgs"); mm=types.ModuleType("std_msgs.msg"); mm.String=String
@@ -24,6 +28,7 @@ class AircraftSetpoint:
         self.protocol_version=0; self.sequence_id=0; self.timestamp=0.0
         self.capture_tolerance_m=0.0; self.maintain_tolerance_m=0.0
         self.minimum_separation_m=0.0; self.maximum_closing_speed_mps=0.0
+        self.control_mode=""; self.command_sequence=0; self.command_timestamp=0.0
 c=types.ModuleType("custom_msgs"); cm=types.ModuleType("custom_msgs.msg"); cm.AircraftSetpoint=AircraftSetpoint
 sys.modules["custom_msgs"]=c; sys.modules["custom_msgs.msg"]=cm
 class BTNodeList:
@@ -39,9 +44,11 @@ class Sequence(_Ctl): pass
 class ReactiveSequence(_Ctl): pass
 class Fallback(_Ctl): pass
 class ReactiveFallback(_Ctl): pass
+class Parallel(_Ctl): pass
 bbn=types.ModuleType("modules.base_bt_nodes")
 for n,o in [("BTNodeList",BTNodeList),("Status",Status),("Node",Node),("Sequence",Sequence),
-            ("ReactiveSequence",ReactiveSequence),("Fallback",Fallback),("ReactiveFallback",ReactiveFallback)]:
+            ("ReactiveSequence",ReactiveSequence),("Fallback",Fallback),("ReactiveFallback",ReactiveFallback),
+            ("Parallel",Parallel)]:
     setattr(bbn,n,o)
 class ConditionWithROSTopics(Node):
     def __init__(self,name,agent,mtt): super().__init__(name); self._cache={}
@@ -56,6 +63,7 @@ class _Log:
     def warn(self,*a,**k): pass
 class _N:
     def get_logger(self): return _Log()
+    def create_subscription(self,*a,**k): return None
 class _B:
     def __init__(self): self.node=_N()
 class Agent:
@@ -67,6 +75,8 @@ IC = importlib.import_module("scenarios.mumt_intercept.bt_nodes")
 DF = importlib.import_module("scenarios.mumt_dogfight_1v1.bt_nodes")
 FF = importlib.import_module("scenarios.mumt_formation_follow.bt_nodes")
 MU = importlib.import_module("scenarios.mumt.bt_nodes")
+FM = importlib.import_module("scenarios.mumt_formation.bt_nodes")
+CV = importlib.import_module("scenarios.mumt.controlv2_seq")
 
 PASS=0; FAIL=0
 def check(l,cond,d=""):
@@ -302,6 +312,69 @@ check("MaintainFormation: RUNNING", mf._interpret_publish(msg,None,None)==Status
 last = msg
 check("MaintainFormation: own/leader 결손 → 래칭",
       mf._build_message(Agent("F16_UAV"), {"own_state":None,"leader_state":None}) is last)
+
+print("\n== [8] ControlV2 sequence 계약 (Phase I-A) ==")
+import json as _cvjson
+
+# (a) ControlV2Seq 단위: heartbeat 동일 / mode·leader·slot 변경 시 +1
+q = CV.ControlV2Seq("UNIT_A")
+s0 = q.sequence_for("formation", "M_F16", (-200.0, 100.0, 0.0))
+check("Seq: 첫 명령 sequence >= 1", s0 >= 1)
+check("Seq: 동일 명령 heartbeat → 동일 seq",
+      q.sequence_for("formation", "M_F16", (-200.0, 100.0, 0.0)) == s0)
+s1 = q.sequence_for("formation", "M_F16", (-120.0, -150.0, 30.0))     # slot 변경
+check("Seq: slot 변경 → +1", s1 == s0 + 1)
+check("Seq: slot 변경 후 heartbeat → 동일",
+      q.sequence_for("formation", "M_F16", (-120.0, -150.0, 30.0)) == s1)
+s2 = q.sequence_for("formation", "M_F17", (-120.0, -150.0, 30.0))     # leader 변경
+check("Seq: leader 변경 → +1", s2 == s1 + 1)
+s3 = q.sequence_for("legacy", "", (0.0, 0.0, 0.0))                    # mode 변경 (해제)
+check("Seq: Formation→Legacy → +1", s3 == s2 + 1)
+s4 = q.sequence_for("formation", "M_F17", (-120.0, -150.0, 30.0))     # 재진입
+check("Seq: Legacy→Formation 재진입 → +1", s4 == s3 + 1)
+
+# (b) 재시작 지속성: 같은 store 의 새 인스턴스가 단조 이어감 (UE 가 계속 도는데 BT 만 재시작해도
+#     seq 가 되돌아가 replay 로 영구 거부되지 않도록)
+q2 = CV.ControlV2Seq("UNIT_A")
+check("Seq: 재시작 인스턴스가 마지막 seq 이상에서 이어감",
+      q2.sequence_for("formation", "M_F16", (0.0, 0.0, 0.0)) > s4)
+
+# (c) get_seq 공유 레지스트리: 같은 기체 → 같은 인스턴스 (Enable/Leave 노드가 seq 공유)
+check("Seq: get_seq 동일 기체 → 동일 인스턴스",
+      CV.get_seq("SHARED_UAV") is CV.get_seq("SHARED_UAV"))
+
+# (d) mumt_formation.FormationFlight: control_mode=formation heartbeat (사용자 시나리오)
+ag = Agent("F16_UAV1")
+ws = FM.MUMTWorldState(ag, "F16_UAV1")
+ws._cb(String(_cvjson.dumps({"aircraft": [
+    {"aircraft_name": "F16_UAV1", "x": 0.0,     "y": 0.0, "z": 50000.0, "yaw": 90.0, "speed_mps": 200.0},
+    {"aircraft_name": "M_F16",    "x": 10000.0, "y": 0.0, "z": 50000.0, "yaw": 90.0, "speed_mps": 200.0},
+]})))
+bbF = {"_mumt_ws_F16_UAV1": ws}
+ff = FM.FormationFlight("FormationFlight", ag, lateral_sign=-1.0, uav_name="F16_UAV1")
+mF1 = ff._build_message(ag, bbF)
+check("FormationFlight: control_mode=formation", mF1.control_mode == "formation")
+check("FormationFlight: leader_name=M_F16", mF1.leader_name == "M_F16")
+check("FormationFlight: command_timestamp=0 (bridge 스탬프)", mF1.command_timestamp == 0.0)
+check("FormationFlight: command_sequence >= 1", mF1.command_sequence >= 1)
+mF2 = ff._build_message(ag, bbF)   # 같은 leader/slot → heartbeat
+check("FormationFlight: 동일 slot/leader heartbeat → 동일 sequence",
+      mF2.command_sequence == mF1.command_sequence)
+check("FormationFlight: guidance_mode=formation 유지(안전 baseline)", mF2.guidance_mode == "formation")
+
+# (e) mumt_formation_follow: Enable=formation, Leave=legacy (해제 시 seq 증가)
+agF = Agent("F16_UAV1")
+bbE = {"leader_id": "M_F16", "follower_id": "F16_UAV1",
+       "own_state": {"aircraft_name": "F16_UAV1", "x": 0.0, "y": 0.0, "z": 50000.0, "yaw": 90.0},
+       "formation_slot": {"offset_front_m": -100.0, "offset_right_m": 50.0, "offset_up_m": 0.0}}
+eff = FF.EnableFormationFollow("EnableFormationFollow", agF)
+mE = eff._build_message(agF, bbE)
+check("EnableFormationFollow: control_mode=formation", mE.control_mode == "formation")
+check("EnableFormationFollow: command_sequence >= 1", mE.command_sequence >= 1)
+lf = FF.LeaveFormation("LeaveFormation", agF)
+mL = lf._build_message(agF, bbE)
+check("LeaveFormation: control_mode=legacy", mL.control_mode == "legacy")
+check("LeaveFormation: 해제 seq > enable seq (역행 없음)", mL.command_sequence > mE.command_sequence)
 
 print(f"\n결과: PASS={PASS} FAIL={FAIL}")
 sys.exit(1 if FAIL else 0)

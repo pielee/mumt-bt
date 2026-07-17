@@ -25,6 +25,7 @@ from custom_msgs.msg import AircraftSetpoint
 
 from modules.base_bt_nodes import BTNodeList, Status, Node, Sequence, ReactiveSequence
 from modules.base_bt_nodes_ros import ActionWithROSTopic
+from scenarios.mumt.controlv2_seq import get_seq
 
 # GatherState/WaitForLeaderTakeoff/Takeoff 재사용 (import 부수효과로 등록도 포함)
 from scenarios.mumt.bt_nodes import (
@@ -144,6 +145,12 @@ class EnableFormationFollow(ActionWithROSTopic):
         msg.max_speed_mps    = self._spd_max
         msg.min_alt_m        = float(base + self._min_agl)
 
+        # ControlV2 운용 편대 (Phase I-A): control_mode="formation" heartbeat (slot/leader 유지 시 seq 유지)
+        msg.control_mode      = "formation"
+        msg.command_sequence  = get_seq(msg.aircraft_name).sequence_for(
+            "formation", msg.leader_name, (msg.slot_front_m, msg.slot_right_m, msg.slot_up_m))
+        msg.command_timestamp = 0.0   # bridge 가 CLOCK_MONOTONIC 스탬프
+
         agent.ros_bridge.node.get_logger().info(
             f"[EnableFormationFollow] leader={leader_id} slot=(F{msg.slot_front_m:.0f} "
             f"R{msg.slot_right_m:.0f} U{msg.slot_up_m:.0f}) minAlt={msg.min_alt_m:.0f} "
@@ -166,9 +173,13 @@ class EnableFormationFollow(ActionWithROSTopic):
         msg.heading_deg      = float(own.get("yaw", 0.0))
         msg.altitude_m       = float(_alt_m(own))
         msg.target_speed_mps = SAFE_LEAVE_SPEED_MPS
+        # ControlV2 명시적 해제: 즉시 Legacy 복귀 (다음 consume 부터 구형 경로)
+        msg.control_mode     = "legacy"
+        msg.command_sequence = get_seq(msg.aircraft_name).sequence_for("legacy", "", (0.0, 0.0, 0.0))
+        msg.command_timestamp = 0.0
         pub.publish(msg)
         self.ros.node.get_logger().info(
-            "[EnableFormationFollow] halt → direct 안전 setpoint 발행 (편대명령 래치 방지)")
+            "[EnableFormationFollow] halt → direct + control_mode=legacy 발행 (ControlV2 해제)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -306,6 +317,10 @@ class LeaveFormation(ActionWithROSTopic):
         msg.heading_deg      = float(heading)
         msg.altitude_m       = float(altitude)
         msg.target_speed_mps = self._speed
+        # ControlV2 명시적 해제 (편대 이탈)
+        msg.control_mode     = "legacy"
+        msg.command_sequence = get_seq(msg.aircraft_name).sequence_for("legacy", "", (0.0, 0.0, 0.0))
+        msg.command_timestamp = 0.0
 
         agent.ros_bridge.node.get_logger().info(
             f"[LeaveFormation] 이탈 hdg={heading:.0f} alt={altitude:.0f} Vtgt={self._speed:.0f} "

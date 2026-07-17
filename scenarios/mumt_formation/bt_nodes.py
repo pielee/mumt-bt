@@ -24,6 +24,7 @@ from modules.base_bt_nodes import (
     Sequence, ReactiveSequence, Fallback, ReactiveFallback, Parallel,  # 제어노드(XML에서 참조)
 )
 from modules.base_bt_nodes_ros import ConditionWithROSTopics, ActionWithROSTopic
+from scenarios.mumt.controlv2_seq import get_seq
 
 # ── 노드 등록 ──────────────────────────────────────────────────────────────────
 
@@ -306,6 +307,8 @@ class FormationFlight(ActionWithROSTopic):
         ws     = _get_world_state(agent, blackboard, self._uav_name)
         manned = ws.manned()
         if not manned:
+            # 유인기 상태가 잠깐 비어도 마지막 setpoint 를 재발행 = 같은 sequence heartbeat 유지
+            # (bridge 가 command_timestamp 를 매 packet 새로 스탬프하므로 watchdog 은 살아있음).
             agent.ros_bridge.node.get_logger().warn(
                 f"[FormationFlight:{self._uav_name}] 유인기 상태 없음 → 마지막 setpoint 유지")
             return self._last_msg
@@ -319,9 +322,19 @@ class FormationFlight(ActionWithROSTopic):
         msg.slot_right_m  = LATERAL_M * self._sign
         msg.slot_up_m     = -ALTITUDE_OFFSET_M
 
+        # ── ControlV2 운용 편대 (Phase I-A): 매 tick control_mode="formation" heartbeat 발행 ──
+        # guidance_mode="formation" 은 그대로 둔다 — ControlV2 가 명령을 거부/미소유하는 프레임엔
+        # RouteControlV2 가 구형 편대 writer 로 되돌리므로(안전 baseline), 여기서 direct 로 두면
+        # 그 fallback 이 heading0/alt0 급강하가 된다. ControlV2 가 소유하는 프레임엔 구형 경로가
+        # skip 되어 둘이 동시에 돌지 않는다. slot/leader 가 그대로면 sequence 는 유지(heartbeat).
+        msg.control_mode      = "formation"
+        msg.command_sequence  = get_seq(msg.aircraft_name).sequence_for(
+            "formation", msg.leader_name, (msg.slot_front_m, msg.slot_right_m, msg.slot_up_m))
+        msg.command_timestamp = 0.0   # bridge 가 CLOCK_MONOTONIC 으로 스탬프
+
         agent.ros_bridge.node.get_logger().info(
             f"[FormationFlight:{self._uav_name}] leader={msg.leader_name} slot=(F{msg.slot_front_m:.0f} "
-            f"R{msg.slot_right_m:.0f} U{msg.slot_up_m:.0f}) | formation모드(UE 60Hz)")
+            f"R{msg.slot_right_m:.0f} U{msg.slot_up_m:.0f}) | ControlV2 formation seq={msg.command_sequence}")
         self._last_msg = msg
         return msg
 
