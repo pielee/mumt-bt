@@ -364,24 +364,29 @@ class Takeoff(ActionWithROSTopic):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# M3 — MaintainFormation : 오프셋 슬롯 + closure (우리 설계)
+# M3 — MaintainFormation : 편대 슬롯 지정 (Phase 4: 인엔진 유도로 이관)
 # ══════════════════════════════════════════════════════════════════════════════
 class MaintainFormation(ActionWithROSTopic):
-    """리더 앞/뒤·옆 고정 슬롯을 추종(aft_offset 부호로 앞/뒤). 멀면 슬롯방위 추적, 가까우면 리더 헤딩으로 수렴(weaving 방지).
-       목표속도 = 리더속도 + along-track closure (오토스로틀이 유지). 항상 RUNNING.
-       래칭 안전: own/leader 순간 결손 시 마지막 setpoint 재발행 + RUNNING (FAILURE 금지 →
-       부모 Sequence가 Wait/Takeoff로 되돌아가지 않음)."""
+    """리더 앞/뒤·옆 고정 슬롯을 유지 — 슬롯/헤딩/closure 숫자 계산은 더 이상 BT가
+       하지 않는다. UE FormationGuidance가 리더 pawn을 직독해 60Hz로 슬롯·ω×r·
+       벡터필드를 계산하므로, BT는 guidance_mode="formation" + 리더/슬롯 지정만
+       발행한다. 항상 RUNNING. 래칭 안전: own/leader 순간 결손 시 마지막 setpoint
+       재발행 (FAILURE 금지 → 부모 Sequence가 Wait/Takeoff로 되돌아가지 않음).
+
+       ports는 XML 호환을 위해 그대로 유지: aft_offset_m(+뒤/-앞) → slot_front_m(+앞)
+       으로 부호 반전, lateral_offset_m → slot_right_m, vertical_offset_m → slot_up_m.
+       blend_radius_m·kp_speed는 구 BT측 유도(weaving 블렌드·closure 게인)의 잔존
+       파라미터로, UE 벡터필드가 대체해 더 이상 쓰이지 않음(XML 호환용으로만 수신)."""
 
     def __init__(self, name, agent,
                  aft_offset_m=AFT_OFFSET_M, lateral_offset_m=LATERAL_OFFSET_M,
                  vertical_offset_m=VERTICAL_OFFSET_M, blend_radius_m=BLEND_RADIUS_M,
                  kp_speed=KP_SPEED, own_name=OWN_NAME):
         super().__init__(name, agent, (AircraftSetpoint, _SETPOINT_TOPIC))
-        self._aft   = float(aft_offset_m)
-        self._lat   = float(lateral_offset_m)
-        self._voff  = float(vertical_offset_m)
-        self._blend = float(blend_radius_m)
-        self._kp    = float(kp_speed)
+        self._front = -float(aft_offset_m)   # aft(+뒤/-앞) → slot_front_m(+앞)
+        self._right = float(lateral_offset_m)
+        self._up    = float(vertical_offset_m)
+        # blend_radius_m/kp_speed: 미사용 (UE FormationGuidance가 대체) — XML 호환용 수신만
         self._own_name = own_name
         self._last_msg = None
 
@@ -393,44 +398,22 @@ class MaintainFormation(ActionWithROSTopic):
                 "[MaintainFormation] own/leader 결손 → 마지막 setpoint 유지")
             return self._last_msg          # None이면 FAILURE지만 GatherState가 먼저 막아줌
 
-        ox, oy = own.get("x", 0.0) * CM_TO_M, own.get("y", 0.0) * CM_TO_M
-        lx, ly = leader.get("x", 0.0) * CM_TO_M, leader.get("y", 0.0) * CM_TO_M
-        lyaw   = leader.get("yaw", 0.0)
-        lspd   = leader.get("speed_mps", 0.0)
-        (fx, fy), (rx, ry) = _leader_axes(lyaw)
-
-        # 슬롯(월드, m)
-        sx = lx - self._aft * fx + self._lat * rx
-        sy = ly - self._aft * fy + self._lat * ry
-        slot_alt = _alt_m(leader) + self._voff
-
-        dx, dy = sx - ox, sy - oy
-        dist   = math.hypot(dx, dy)
-
-        # 헤딩: 멀면 슬롯방위, 가까우면 리더 헤딩으로 블렌드
-        bearing = unit_xy_to_heading(dx, dy)
-        w = clamp(dist / self._blend, 0.0, 1.0)
-        heading = shortest_heading_blend(lyaw, bearing, w)
-
-        # 고도: 슬롯고도, 단 스폰+MIN_AGL 하한
         base = (blackboard.get("init_alt") or {}).get(own.get("aircraft_name", ""), _alt_m(own))
-        altitude = max(slot_alt, base + MIN_AGL_M)
 
-        # 속도: 멀면 따라잡기(리더+50), 가까우면 리더+along closure (하한 MIN_FORM_SPEED)
-        dist_to_leader = math.hypot(lx - ox, ly - oy)
-        if dist_to_leader > RENDEZVOUS_M:
-            speed = lspd + CATCHUP_MARGIN        # 멀면 '리더+여유'로 추격 (리더 속도에 상대)
-        else:
-            along = dx * fx + dy * fy            # +면 슬롯 앞(뒤처짐)→가속, -면 앞질러→감속
-            speed = lspd + clamp(self._kp * along, ALONG_SPD_MIN, ALONG_SPD_MAX)
-        speed = max(MIN_FORM_SPEED, speed)        # 실속 하한만 — 나머진 리더 속도를 그대로 추종
+        msg = AircraftSetpoint()
+        msg.aircraft_name = _own_routing_name(own, self._own_name)
+        msg.guidance_mode = "formation"
+        msg.leader_name   = str(leader.get("aircraft_name") or LEADER_NAME)
+        msg.slot_front_m  = self._front
+        msg.slot_right_m  = self._right
+        msg.slot_up_m     = self._up
+        msg.min_alt_m     = float(base + MIN_AGL_M)     # 고도 하한 가드 이관
 
         agent.ros_bridge.node.get_logger().info(
-            f"[MaintainFormation] 슬롯거리={dist:.0f}m 리더거리={dist_to_leader:.0f}m "
-            f"hdg={heading:.0f}° alt={altitude:.0f} Vtgt={speed:.0f} | 리더(spd={lspd:.0f} alt={_alt_m(leader):.0f})")
-        self._last_msg = _setpoint(_own_routing_name(own, self._own_name),
-                                   heading, altitude, target_speed=speed)
-        return self._last_msg
+            f"[MaintainFormation] leader={msg.leader_name} slot=(F{self._front:.0f} "
+            f"R{self._right:.0f} U{self._up:.0f}) minAlt={msg.min_alt_m:.0f} | formation모드(UE 60Hz)")
+        self._last_msg = msg
+        return msg
 
     def _interpret_publish(self, msg, agent, blackboard) -> Status:
         return Status.RUNNING       # 편대는 끝나지 않음 (항상 RUNNING, FAILURE 금지)

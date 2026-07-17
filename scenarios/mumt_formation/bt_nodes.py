@@ -289,54 +289,41 @@ class UAVTakeOff(ActionWithROSTopic):
 
 class FormationFlight(ActionWithROSTopic):
     """
-    ARROW 편대 비행 유지.
-    Phase1 (랑데부): 유인기까지 > RENDEZVOUS_DIST_M → 유인기 직접 추종(빠르게)
-    Phase2 (편대유지): 이하 → 오프셋 슬롯 유지(목표속도=리더속도±위치보정)
-    항상 RUNNING.
+    ARROW 편대 슬롯 지정 — Phase 4: 유도 계산(랑데부/슬롯 추종)은 더 이상 BT가 하지
+    않는다. UE FormationGuidance가 유인기 pawn을 직독해 60Hz로 랑데부·슬롯·closure를
+    계산하므로(구 Phase1 랑데부/Phase2 전환 로직을 REJOIN이 대체), BT는
+    guidance_mode="formation" + 리더/슬롯 지정만 발행한다. 항상 RUNNING.
+    ports는 그대로 유지: lateral_sign(-1=좌/+1=우 윙맨), uav_name.
     """
 
     def __init__(self, name, agent, lateral_sign=-1.0, uav_name=None):
         super().__init__(name, agent, (AircraftSetpoint, _SETPOINT_TOPIC))
         self._sign     = lateral_sign
         self._uav_name = _resolve_key(agent, uav_name)
+        self._last_msg = None
 
     def _build_message(self, agent, blackboard):
         ws     = _get_world_state(agent, blackboard, self._uav_name)
         manned = ws.manned()
         if not manned:
             agent.ros_bridge.node.get_logger().warn(
-                f"[FormationFlight:{self._uav_name}] 유인기 상태 없음")
-            return None
+                f"[FormationFlight:{self._uav_name}] 유인기 상태 없음 → 마지막 setpoint 유지")
+            return self._last_msg
 
-        lx, ly, la, lyaw = (manned["x_m"], manned["y_m"],
-                            manned["altitude_m"], manned["heading_deg"])
-        uav = ws.uav()
+        msg = AircraftSetpoint()
+        msg.aircraft_name = _own_name(ws, self._uav_name)
+        msg.guidance_mode = "formation"
+        msg.leader_name   = str(manned.get("aircraft_name") or MANNED_NAME)
+        # ARROW 슬롯(리더 트랙 프레임): 뒤(TRAIL_M)·좌/우(LATERAL_M×sign)·아래(ALTITUDE_OFFSET_M)
+        msg.slot_front_m  = -TRAIL_M
+        msg.slot_right_m  = LATERAL_M * self._sign
+        msg.slot_up_m     = -ALTITUDE_OFFSET_M
 
-        if uav:
-            ux, uy = uav["x_m"], uav["y_m"]
-            dist_to_leader = _dist(ux, uy, lx, ly)
-            ualt, uspd = uav["altitude_m"], uav["speed_mps"]
-            if dist_to_leader > RENDEZVOUS_DIST_M:
-                # Phase 1: 랑데부 — 리더속도+여유로(항상 리더보다 빠르게) 따라잡기
-                hdg, alt = _heading_to(ux, uy, lx, ly), max(la, 0.0)
-                spd = max(RENDEZVOUS_SPEED_MPS, manned.get("speed_mps", 0.0) + RENDEZVOUS_MARGIN_MPS)
-                agent.ros_bridge.node.get_logger().info(
-                    f"[FormationFlight:{self._uav_name}] Phase1 랑데부 | 리더거리={dist_to_leader:.0f}m | "
-                    f"현재 alt={ualt:.0f}m spd={uspd:.0f}m/s → Vtgt={spd:.0f}")
-            else:
-                # Phase 2: 편대 유지
-                tx, ty, ta = _formation_target(lx, ly, la, lyaw, self._sign)
-                hdg, alt = _heading_to(ux, uy, tx, ty), ta
-                (fx, fy), _ = _leader_axes(lyaw)
-                along = (tx - ux) * fx + (ty - uy) * fy   # 슬롯-uav를 리더 전진방향에 투영
-                spd = _station_speed(manned.get("speed_mps", 0.0), along)
-                agent.ros_bridge.node.get_logger().info(
-                    f"[FormationFlight:{self._uav_name}] Phase2 | 슬롯거리={_dist(ux,uy,tx,ty):.0f}m hdg={hdg:.0f}° | "
-                    f"현재(alt={ualt:.0f}m spd={uspd:.0f}m/s) → 목표(alt={alt:.0f}m V={spd:.0f})")
-        else:
-            hdg, alt, spd = lyaw, max(la - ALTITUDE_OFFSET_M, 0.0), max(0.0, manned.get("speed_mps", 0.0))
-
-        return _setpoint_msg(_own_name(ws, self._uav_name), hdg, alt, target_speed=spd)
+        agent.ros_bridge.node.get_logger().info(
+            f"[FormationFlight:{self._uav_name}] leader={msg.leader_name} slot=(F{msg.slot_front_m:.0f} "
+            f"R{msg.slot_right_m:.0f} U{msg.slot_up_m:.0f}) | formation모드(UE 60Hz)")
+        self._last_msg = msg
+        return msg
 
     def _interpret_publish(self, msg, agent, blackboard) -> Status:
         return Status.RUNNING

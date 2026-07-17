@@ -3,7 +3,7 @@
 ROS 없이 실행 가능한 스텁 하네스 (std_msgs/custom_msgs/modules 목킹).
 실행: python3 tools/verify_bt_modes.py   (py_bt_ros 루트에서)
 """
-import sys, os, types, enum, math, inspect
+import sys, os, types, enum, math, inspect, asyncio, time
 import xml.etree.ElementTree as ET
 sys.dont_write_bytecode = True
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +21,9 @@ class AircraftSetpoint:
         self.guidance_mode=""; self.leader_name=""; self.target_name=""
         self.slot_front_m=0.0; self.slot_right_m=0.0; self.slot_up_m=0.0
         self.min_speed_mps=0.0; self.max_speed_mps=0.0; self.min_alt_m=0.0
-        self.use_waypoint=False; self.target_x=0.0; self.target_y=0.0; self.target_z=0.0
+        self.protocol_version=0; self.sequence_id=0; self.timestamp=0.0
+        self.capture_tolerance_m=0.0; self.maintain_tolerance_m=0.0
+        self.minimum_separation_m=0.0; self.maximum_closing_speed_mps=0.0
 c=types.ModuleType("custom_msgs"); cm=types.ModuleType("custom_msgs.msg"); cm.AircraftSetpoint=AircraftSetpoint
 sys.modules["custom_msgs"]=c; sys.modules["custom_msgs.msg"]=cm
 class BTNodeList:
@@ -63,6 +65,8 @@ import importlib
 FG = importlib.import_module("scenarios.mumt_manned_formation.bt_nodes")
 IC = importlib.import_module("scenarios.mumt_intercept.bt_nodes")
 DF = importlib.import_module("scenarios.mumt_dogfight_1v1.bt_nodes")
+FF = importlib.import_module("scenarios.mumt_formation_follow.bt_nodes")
+MU = importlib.import_module("scenarios.mumt.bt_nodes")
 
 PASS=0; FAIL=0
 def check(l,cond,d=""):
@@ -174,6 +178,130 @@ for el in bt_el.iter():
         check(f"{el.tag} 등록+생성 OK", True)
     except TypeError as e:
         check(f"{el.tag} 바인딩", False, str(e))
+
+print("== [6] mumt_formation_follow: SetLeader/SetFormationSlot/EnableFormationFollow/"
+      "CheckFormationCaptured/CheckFormationMaintained/LeaveFormation ==")
+
+# (a) SetLeader/SetFormationSlot이 blackboard에 기록
+sl = FF.SetLeader("SetLeader", Agent("F16_UAV1"), leader_id="M_F16", follower_id="F16_UAV1")
+bb6 = {}
+st = asyncio.run(sl.run(Agent("F16_UAV1"), bb6))
+check("SetLeader: SUCCESS", st==Status.SUCCESS)
+check("SetLeader: blackboard leader_id/follower_id",
+      bb6.get("leader_id")=="M_F16" and bb6.get("follower_id")=="F16_UAV1")
+
+sfs = FF.SetFormationSlot("SetFormationSlot", Agent("F16_UAV1"),
+                          offset_front_m=-100, offset_right_m=50, offset_up_m=0,
+                          capture_tolerance_m=30, maintain_tolerance_m=50,
+                          minimum_separation_m=30, maximum_closing_speed_mps=0)
+st = asyncio.run(sfs.run(Agent("F16_UAV1"), bb6))
+slot = bb6.get("formation_slot") or {}
+check("SetFormationSlot: SUCCESS", st==Status.SUCCESS)
+check("SetFormationSlot: blackboard 슬롯 dict",
+      slot.get("offset_front_m")==-100.0 and slot.get("offset_right_m")==50.0
+      and slot.get("capture_tolerance_m")==30.0 and slot.get("maintain_tolerance_m")==50.0
+      and slot.get("minimum_separation_m")==30.0, f"{slot}")
+
+# (b) EnableFormationFollow: formation 모드 + leader_name/슬롯/허용오차 + confirm_ticks 후 SUCCESS
+eff = FF.EnableFormationFollow("EnableFormationFollow", Agent("F16_UAV1"),
+                               min_speed_mps=120, max_speed_mps=335, min_agl_m=150, confirm_ticks=3)
+bb_eff = dict(bb6)
+bb_eff["own_state"] = ac("F16_UAV1", 0, 0, 100)
+bb_eff["init_alt"]  = {"F16_UAV1": 100.0}
+msg = eff._build_message(Agent("F16_UAV1"), bb_eff)
+check("EnableFormationFollow: formation 모드", msg.guidance_mode=="formation")
+check("EnableFormationFollow: leader_name=M_F16", msg.leader_name=="M_F16")
+check("EnableFormationFollow: 슬롯 (-100,50,0)",
+      (msg.slot_front_m,msg.slot_right_m,msg.slot_up_m)==(-100.0,50.0,0.0))
+check("EnableFormationFollow: 허용오차",
+      msg.capture_tolerance_m==30.0 and msg.maintain_tolerance_m==50.0
+      and msg.minimum_separation_m==30.0)
+check("EnableFormationFollow: min_alt_m=spawn+min_agl", abs(msg.min_alt_m-(100.0+150.0))<1e-6, f"{msg.min_alt_m}")
+statuses = []
+m = msg
+for _ in range(3):
+    statuses.append(eff._interpret_publish(m, Agent("F16_UAV1"), bb_eff))
+    m = eff._build_message(Agent("F16_UAV1"), bb_eff)
+check("EnableFormationFollow: RUNNING,RUNNING,SUCCESS(confirm_ticks=3)",
+      statuses==[Status.RUNNING,Status.RUNNING,Status.SUCCESS], f"{statuses}")
+
+# (c) CheckFormationCaptured: RUNNING → captured=True → SUCCESS, timeout → FAILURE
+cfc = FF.CheckFormationCaptured("CheckFormationCaptured", Agent("F16_UAV1"), timeout_s=180)
+bb_cfc = {"own_state": ac("F16_UAV1", 0, 0, 100, guidance={"captured": False, "maintained": False})}
+st = asyncio.run(cfc.run(Agent("F16_UAV1"), bb_cfc))
+check("CheckFormationCaptured: captured=False → RUNNING", st==Status.RUNNING)
+bb_cfc["own_state"] = ac("F16_UAV1", 0, 0, 100, guidance={"captured": True, "maintained": True})
+st = asyncio.run(cfc.run(Agent("F16_UAV1"), bb_cfc))
+check("CheckFormationCaptured: captured=True → SUCCESS", st==Status.SUCCESS)
+
+cfc2 = FF.CheckFormationCaptured("CheckFormationCaptured", Agent("F16_UAV1"), timeout_s=0.01)
+bb_cfc2 = {"own_state": ac("F16_UAV1", 0, 0, 100, guidance={"captured": False})}
+asyncio.run(cfc2.run(Agent("F16_UAV1"), bb_cfc2))       # 첫 틱 → 타이머 시작
+time.sleep(0.02)
+st = asyncio.run(cfc2.run(Agent("F16_UAV1"), bb_cfc2))
+check("CheckFormationCaptured: timeout 초과 → FAILURE", st==Status.FAILURE)
+
+# CheckFormationMaintained 보너스 회귀(명세 (a)-(f) 외 추가 안전망)
+cfm = FF.CheckFormationMaintained("CheckFormationMaintained", Agent("F16_UAV1"),
+                                  hold_s=0.0, break_grace_s=0.01)
+bb_cfm = {"own_state": ac("F16_UAV1", 0, 0, 100, guidance={"captured": True, "maintained": True})}
+st = asyncio.run(cfm.run(Agent("F16_UAV1"), bb_cfm))
+check("CheckFormationMaintained: 유지 중 → RUNNING(hold_s=0)", st==Status.RUNNING)
+bb_cfm["own_state"] = ac("F16_UAV1", 0, 0, 100, guidance={"captured": False, "maintained": False})
+asyncio.run(cfm.run(Agent("F16_UAV1"), bb_cfm))
+time.sleep(0.02)
+st = asyncio.run(cfm.run(Agent("F16_UAV1"), bb_cfm))
+check("CheckFormationMaintained: captured 이탈 grace 초과 → FAILURE", st==Status.FAILURE)
+
+# (d) LeaveFormation: direct 모드 + offset heading, publish_ticks 후 SUCCESS
+lf = FF.LeaveFormation("LeaveFormation", Agent("F16_UAV1"),
+                       heading_offset_deg=45, alt_offset_m=0, speed_mps=220, publish_ticks=2)
+bb_lf = {"follower_id": "F16_UAV1", "own_state": ac("F16_UAV1", 0, 0, 100, yaw=350.0, spd=200)}
+msg = lf._build_message(Agent("F16_UAV1"), bb_lf)
+check("LeaveFormation: direct 모드", msg.guidance_mode=="direct")
+check("LeaveFormation: heading=yaw+offset(wrap 0-360)",
+      abs(_dh(msg.heading_deg, (350.0+45.0)%360.0))<1e-6, f"{msg.heading_deg}")
+check("LeaveFormation: altitude=own+offset", abs(msg.altitude_m-100.0)<1e-6)
+check("LeaveFormation: speed=220", msg.target_speed_mps==220.0)
+st1 = lf._interpret_publish(msg, Agent("F16_UAV1"), bb_lf)
+check("LeaveFormation: tick1 RUNNING", st1==Status.RUNNING)
+msg2 = lf._build_message(Agent("F16_UAV1"), bb_lf)
+st2 = lf._interpret_publish(msg2, Agent("F16_UAV1"), bb_lf)
+check("LeaveFormation: SUCCESS after publish_ticks", st2==Status.SUCCESS)
+
+# (e) XML 바인딩 (scenarios/mumt_formation_follow/uav1_bt.xml)
+print("== [6e] XML 바인딩 (mumt_formation_follow uav1_bt.xml) ==")
+bt_el = ET.parse(os.path.join(_ROOT,"scenarios/mumt_formation_follow/uav1_bt.xml")).getroot().find("BehaviorTree")
+for el in bt_el.iter():
+    if el.tag=="BehaviorTree": continue
+    if el.tag in BTNodeList.CONTROL_NODES:
+        check(f"제어 {el.tag}", hasattr(FF, el.tag)); continue
+    cls = getattr(FF, el.tag, None)
+    attrs = {k: conv(v) for k,v in el.attrib.items()}
+    try:
+        inspect.signature(cls.__init__).bind(None, el.tag, Agent("F16_UAV1"), **attrs)
+        cls(el.tag, Agent("F16_UAV1"), **attrs)
+        check(f"{el.tag} 등록+생성 OK", True)
+    except TypeError as e:
+        check(f"{el.tag} 바인딩", False, str(e))
+
+# (f) 전환된 mumt.MaintainFormation: guidance_mode="formation" + 슬롯 부호 매핑
+print("== [7] mumt.MaintainFormation 편대모드 전환 ==")
+mf = MU.MaintainFormation("MaintainFormation", Agent("F16_UAV"),
+                          aft_offset_m=-80, lateral_offset_m=40, vertical_offset_m=0,
+                          own_name="F16_UAV")
+bb7 = {"own_state": ac("F16_UAV", 0, 0, 900), "leader_state": ac("M_F16", 0, 200, 1000),
+       "init_alt": {"F16_UAV": 900.0}}
+msg = mf._build_message(Agent("F16_UAV"), bb7)
+check("MaintainFormation: formation 모드", msg.guidance_mode=="formation")
+check("MaintainFormation: leader_name=M_F16", msg.leader_name=="M_F16")
+check("MaintainFormation: slot_front_m=+80 (aft_offset_m=-80)",
+      abs(msg.slot_front_m-80.0)<1e-6, f"{msg.slot_front_m}")
+check("MaintainFormation: slot_right_m=40", abs(msg.slot_right_m-40.0)<1e-6)
+check("MaintainFormation: RUNNING", mf._interpret_publish(msg,None,None)==Status.RUNNING)
+last = msg
+check("MaintainFormation: own/leader 결손 → 래칭",
+      mf._build_message(Agent("F16_UAV"), {"own_state":None,"leader_state":None}) is last)
 
 print(f"\n결과: PASS={PASS} FAIL={FAIL}")
 sys.exit(1 if FAIL else 0)

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="mumt-formation-follow">
+
+    <!-- ===== F16_UAV1 : 자체 이륙 → 리더(M_F16) 편대 추종 (인엔진 3계층 유도) =====
+         gather → 리더 이륙대기 → 자체 이륙 → 리더/슬롯 지정(blackboard) →
+         formation setpoint 발행(UE 래치 확인) → 슬롯 캡처 대기 → 편대 유지 모니터.
+         슬롯·ω×r·벡터필드 계산은 BT가 아니라 UE FormationGuidance가 60Hz 수행. -->
+    <ReactiveSequence>
+      <GatherState own_name="F16_UAV1" leader_name="M_F16"/>
+      <Sequence>
+        <WaitForLeaderTakeoff own_name="F16_UAV1"/>
+        <Takeoff own_name="F16_UAV1"/>
+        <SetLeader leader_id="M_F16" follower_id="F16_UAV1"/>
+        <SetFormationSlot offset_front_m="-100" offset_right_m="50" offset_up_m="0"
+                           capture_tolerance_m="30" maintain_tolerance_m="50"
+                           minimum_separation_m="30" maximum_closing_speed_mps="0"/>
+        <EnableFormationFollow min_speed_mps="120" max_speed_mps="335"
+                                min_agl_m="150" confirm_ticks="5"/>
+        <CheckFormationCaptured timeout_s="180"/>
+        <CheckFormationMaintained hold_s="0" break_grace_s="3"/>
+      </Sequence>
+    </ReactiveSequence>
+
+  </BehaviorTree>
+</root>
