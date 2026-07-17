@@ -1,21 +1,23 @@
 """
-MUM-T 웨이포인트 추종 — StickController(Controller_CY) 조준 제어기 구동.
+MUM-T 웨이포인트 추종 — BT-level direct 유도(heading/altitude), 인엔진 3계층
+제어스택(FixedWingGuidance → F16CommandController) 구동.
 
-BVRGym 제거 후 새 제어 방식: BT는 heading/altitude가 아니라 **목표점(UE 월드 cm)**을
-AircraftSetpoint.{use_waypoint, target_x/y/z}로 보낸다. UE가 그 점을 NEU 미터로 변환해
-StickController::GetStick에 먹여 기수를 조준(pitch로 상하까지)한다. 속도는 기존
-오토스로틀(target_speed_mps)이 유지 — StickController는 throttle 출력이 없다.
+Phase 4 개편으로 AircraftSetpoint.{use_waypoint, target_x/y/z}가 폐지됐다. 대신
+매 틱 own→현재 웨이포인트 벡터에서 나침반 헤딩을 계산해 guidance_mode="direct"로
+heading_deg/altitude_m/target_speed_mps를 발행한다(계산 자체는 BT가 10Hz로 수행 —
+이 시나리오는 UE 인엔진 유도 모드를 쓰지 않는 direct-only 경로). 속도는 기존과
+동일하게 오토스로틀(target_speed_mps)이 유지.
 
-★ Takeoff 노드는 재사용하지 않는다: 그건 heading/altitude를 보내는데 BVRGym이
-   사라져 UE가 무시한다. 대신 첫 웨이포인트를 전방(활주로 동쪽)+상방에 두어
-   StickController가 지상에서부터 기수를 들어 이륙·상승하게 한다.
+★ Takeoff 노드는 재사용하지 않는다: 첫 웨이포인트를 전방(활주로 동쪽)+상방에 두어
+   지상에서부터 그 방위·고도를 조준하는 것만으로 이륙·상승이 되게 한다.
 
 좌표: 웨이포인트는 사람이 읽기 쉬운 **스폰 상대 (dNorth, dEast, dUp) 미터**로 저작.
-  BT가 스폰(최초관측) UE 위치에 더해 UE 월드 cm로 패킹해 전송:
+  BT가 스폰(최초관측) UE 위치에 더해 UE 월드 cm 절대좌표로 변환(도달판정·헤딩계산용):
     target_x = x0 + dEast*100      (UE +X = East)
     target_y = y0 - dNorth*100     (UE +Y = South → North은 -Y)
     target_z = z0 + dUp*100        (UE +Z = Up)
-  UE는 역변환(North=-y/100, East=x/100, Up=z/100)으로 되돌린다 (왕복 항등).
+  헤딩은 scenarios.mumt의 unit_xy_to_heading(dx,dy) = atan2(ΔEast,ΔNorth) 재사용
+  (UE x=East, y=South → 나침반 0=북,90=동과 동일 규약).
 """
 
 import json
@@ -30,7 +32,8 @@ from modules.base_bt_nodes import (
 from modules.base_bt_nodes_ros import ConditionWithROSTopics, ActionWithROSTopic
 
 from scenarios.mumt.bt_nodes import (
-    _name_matches, _alt_m, _own_routing_name, CM_TO_M, _STATE_TOPIC, _SETPOINT_TOPIC,
+    _name_matches, _alt_m, _own_routing_name, unit_xy_to_heading,
+    CM_TO_M, _STATE_TOPIC, _SETPOINT_TOPIC,
 )
 
 BTNodeList.CONDITION_NODES.extend(["GatherOwnState"])
@@ -78,10 +81,11 @@ class GatherOwnState(ConditionWithROSTopics):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FollowWaypoint — 스폰 상대 경로를 조준 제어기로 추종 (이륙 포함)
+# FollowWaypoint — 스폰 상대 경로를 direct 헤딩/고도 조준으로 추종 (이륙 포함)
 # ══════════════════════════════════════════════════════════════════════════════
 class FollowWaypoint(ActionWithROSTopic):
-    """스폰 상대 웨이포인트(NEU 미터)를 UE 월드 cm로 패킹해 use_waypoint setpoint로 발행.
+    """스폰 상대 웨이포인트(NEU 미터)를 UE 월드 cm 절대좌표로 변환해, own→목표점
+       방위를 나침반 헤딩으로 계산 후 guidance_mode="direct" setpoint로 발행.
        도달반경(3D) 안에 들면 다음 점으로, loop면 순환. 항상 RUNNING(끝은 SUCCESS 옵션).
        own 순간 결손 시 마지막 setpoint 재발행(래칭)."""
 
@@ -117,21 +121,22 @@ class FollowWaypoint(ActionWithROSTopic):
         tx, ty, tz = self._target_ue_cm(dN, dE, dU)
         tz = max(tz, self._spawn[2] + self._min_agl * 100.0)   # 고도 하한 가드
 
+        ox, oy, oz = own.get("x", 0.0), own.get("y", 0.0), own.get("z", 0.0)
+        heading = unit_xy_to_heading(tx - ox, ty - oy)
+
         msg = AircraftSetpoint()
         msg.aircraft_name    = _own_routing_name(own, self._own_name)
-        msg.use_waypoint     = True
-        msg.target_x         = float(tx)
-        msg.target_y         = float(ty)
-        msg.target_z         = float(tz)
+        msg.guidance_mode    = "direct"
+        msg.heading_deg      = float(heading)
+        msg.altitude_m       = float(tz * CM_TO_M)
         msg.target_speed_mps = float(self._speed)
 
         # 도달 판정용 3D 거리(m)
-        ox, oy, oz = own.get("x", 0.0), own.get("y", 0.0), own.get("z", 0.0)
         dist_m = math.hypot(math.hypot(tx - ox, ty - oy), tz - oz) * CM_TO_M
 
         agent.ros_bridge.node.get_logger().info(
             f"[FollowWaypoint] wp {self._idx+1}/{len(self._wps)} "
-            f"(N{dN:.0f} E{dE:.0f} U{dU:.0f}) 거리={dist_m:.0f}m Vtgt={self._speed:.0f}")
+            f"(N{dN:.0f} E{dE:.0f} U{dU:.0f}) hdg={heading:.0f}° 거리={dist_m:.0f}m Vtgt={self._speed:.0f}")
 
         # 도달 시 다음 웨이포인트로
         if dist_m < self._radius:
