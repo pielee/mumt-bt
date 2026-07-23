@@ -6,7 +6,7 @@ agent:
   behavior_tree_xml: "mumt_formation.xml"
 
 bt_runner:
-  bt_tick_rate: 200.0
+  bt_tick_rate: 20.0
   bt_visualiser:
     enabled: True
     screen_width: 900

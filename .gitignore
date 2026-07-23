@@ -23,3 +23,7 @@ log/
 
 # Ignore py_bt_ros generated files
 results/
+formation_run.csv
+
+# OMC session state (operational, never committed)
+.omc/
